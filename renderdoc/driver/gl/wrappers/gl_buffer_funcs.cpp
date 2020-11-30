@@ -30,6 +30,16 @@
 
 enum GLbufferbitfield
 {
+  DYNAMIC_STORAGE_BIT = 0x0100,
+  MAP_READ_BIT = 0x0001,
+  MAP_WRITE_BIT = 0x0002,
+  MAP_PERSISTENT_BIT = 0x0040,
+  MAP_COHERENT_BIT = 0x0080,
+  MAP_INVALIDATE_BUFFER_BIT = 0x0008,
+  MAP_INVALIDATE_RANGE_BIT = 0x0004,
+  MAP_FLUSH_EXPLICIT_BIT = 0x0010,
+  MAP_UNSYNCHRONIZED_BIT = 0x0020,
+  CLIENT_STORAGE_BIT_EXT = 0x0200,
 };
 
 DECLARE_REFLECTION_ENUM(GLbufferbitfield);
@@ -43,16 +53,16 @@ rdcstr DoStringise(const GLbufferbitfield &el)
 
   BEGIN_BITFIELD_STRINGISE(GLbufferbitfield);
   {
-    STRINGISE_BITFIELD_BIT(GL_DYNAMIC_STORAGE_BIT);
-    STRINGISE_BITFIELD_BIT(GL_MAP_READ_BIT);
-    STRINGISE_BITFIELD_BIT(GL_MAP_WRITE_BIT);
-    STRINGISE_BITFIELD_BIT(GL_MAP_PERSISTENT_BIT);
-    STRINGISE_BITFIELD_BIT(GL_MAP_COHERENT_BIT);
-    STRINGISE_BITFIELD_BIT(GL_MAP_INVALIDATE_BUFFER_BIT);
-    STRINGISE_BITFIELD_BIT(GL_MAP_INVALIDATE_RANGE_BIT);
-    STRINGISE_BITFIELD_BIT(GL_MAP_FLUSH_EXPLICIT_BIT);
-    STRINGISE_BITFIELD_BIT(GL_MAP_UNSYNCHRONIZED_BIT);
-    STRINGISE_BITFIELD_BIT(GL_CLIENT_STORAGE_BIT);
+    STRINGISE_BITFIELD_BIT_NAMED(GL_DYNAMIC_STORAGE_BIT, "GL_DYNAMIC_STORAGE_BIT");
+    STRINGISE_BITFIELD_BIT_NAMED(GL_MAP_READ_BIT, "GL_MAP_READ_BIT");
+    STRINGISE_BITFIELD_BIT_NAMED(GL_MAP_WRITE_BIT, "GL_MAP_WRITE_BIT");
+    STRINGISE_BITFIELD_BIT_NAMED(GL_MAP_PERSISTENT_BIT, "GL_MAP_PERSISTENT_BIT");
+    STRINGISE_BITFIELD_BIT_NAMED(GL_MAP_COHERENT_BIT, "GL_MAP_COHERENT_BIT");
+    STRINGISE_BITFIELD_BIT_NAMED(GL_MAP_INVALIDATE_BUFFER_BIT, "GL_MAP_INVALIDATE_BUFFER_BIT");
+    STRINGISE_BITFIELD_BIT_NAMED(GL_MAP_INVALIDATE_RANGE_BIT, "GL_MAP_INVALIDATE_RANGE_BIT");
+    STRINGISE_BITFIELD_BIT_NAMED(GL_MAP_FLUSH_EXPLICIT_BIT, "GL_MAP_FLUSH_EXPLICIT_BIT");
+    STRINGISE_BITFIELD_BIT_NAMED(GL_MAP_UNSYNCHRONIZED_BIT, "GL_MAP_UNSYNCHRONIZED_BIT");
+    STRINGISE_BITFIELD_BIT_NAMED(GL_CLIENT_STORAGE_BIT, "GL_CLIENT_STORAGE_BIT");
   }
   END_BITFIELD_STRINGISE();
 }
@@ -243,9 +253,19 @@ void WrappedOpenGL::glBindBuffer(GLenum target, GLuint buffer)
     Chunk *chunk = NULL;
 
     if(buffer == 0)
+    {
       cd.m_BufferRecord[idx] = NULL;
+    }
     else
+    {
       cd.m_BufferRecord[idx] = GetResourceManager()->GetResourceRecord(BufferRes(GetCtx(), buffer));
+
+      if(cd.m_BufferRecord[idx] == NULL)
+      {
+        RDCERR("Called glBindBuffer with unrecognised or deleted buffer");
+        return;
+      }
+    }
 
     {
       USE_SCRATCH_SERIALISER();
@@ -533,10 +553,17 @@ void WrappedOpenGL::glBufferStorage(GLenum target, GLsizeiptr size, const void *
   SERIALISE_TIME_CALL(GL.glBufferStorage(target, size, data, flags));
 
   if(IsCaptureMode(m_State))
-    Common_glNamedBufferStorageEXT(GetCtxData().m_BufferRecord[BufferIdx(target)]->GetResourceID(),
-                                   size, data, origflags);
+  {
+    GLResourceRecord *record = GetCtxData().m_BufferRecord[BufferIdx(target)];
+    RDCASSERTMSG("Couldn't identify object used in function. Unbound or bad GLuint?", record);
+
+    if(record)
+      Common_glNamedBufferStorageEXT(record->GetResourceID(), size, data, origflags);
+  }
   else
+  {
     RDCERR("Internal buffers should be allocated via dsa interfaces");
+  }
 
   SAFE_DELETE_ARRAY(dummy);
 }
@@ -1122,6 +1149,9 @@ void WrappedOpenGL::glNamedCopyBufferSubDataEXT(GLuint readBuffer, GLuint writeB
         GetResourceManager()->GetResourceRecord(BufferRes(GetCtx(), writeBuffer));
     RDCASSERT(readrecord && writerecord);
 
+    if(!readrecord || !writerecord)
+      return;
+
     if(m_HighTrafficResources.find(writerecord->GetResourceID()) != m_HighTrafficResources.end() &&
        IsBackgroundCapturing(m_State))
       return;
@@ -1190,6 +1220,9 @@ void WrappedOpenGL::glCopyBufferSubData(GLenum readTarget, GLenum writeTarget, G
     GLResourceRecord *readrecord = GetCtxData().m_BufferRecord[BufferIdx(readTarget)];
     GLResourceRecord *writerecord = GetCtxData().m_BufferRecord[BufferIdx(writeTarget)];
     RDCASSERT(readrecord && writerecord);
+
+    if(!readrecord || !writerecord)
+      return;
 
     if(m_HighTrafficResources.find(writerecord->GetResourceID()) != m_HighTrafficResources.end() &&
        IsBackgroundCapturing(m_State))
@@ -1265,10 +1298,20 @@ void WrappedOpenGL::glBindBufferBase(GLenum target, GLuint index, GLuint buffer)
     GLResourceRecord *r = NULL;
 
     if(buffer == 0)
+    {
       r = cd.m_BufferRecord[idx] = NULL;
+    }
     else
+    {
       r = cd.m_BufferRecord[idx] =
           GetResourceManager()->GetResourceRecord(BufferRes(GetCtx(), buffer));
+
+      if(r == NULL)
+      {
+        RDCERR("Called glBindBufferBase with unrecognised or deleted buffer");
+        return;
+      }
+    }
 
     if(target == eGL_ATOMIC_COUNTER_BUFFER)
       cd.m_MaxAtomicBind = RDCMAX((GLint)index + 1, cd.m_MaxAtomicBind);
@@ -1399,10 +1442,20 @@ void WrappedOpenGL::glBindBufferRange(GLenum target, GLuint index, GLuint buffer
     GLResourceRecord *r = NULL;
 
     if(buffer == 0)
+    {
       r = cd.m_BufferRecord[idx] = NULL;
+    }
     else
+    {
       r = cd.m_BufferRecord[idx] =
           GetResourceManager()->GetResourceRecord(BufferRes(GetCtx(), buffer));
+
+      if(r == NULL)
+      {
+        RDCERR("Called glBindBufferBase with unrecognised or deleted buffer");
+        return;
+      }
+    }
 
     if(target == eGL_ATOMIC_COUNTER_BUFFER)
       cd.m_MaxAtomicBind = RDCMAX((GLint)index + 1, cd.m_MaxAtomicBind);
@@ -1549,10 +1602,20 @@ void WrappedOpenGL::glBindBuffersBase(GLenum target, GLuint first, GLsizei count
     GLResourceRecord *r = NULL;
 
     if(buffers == NULL || buffers[0] == 0)
+    {
       r = cd.m_BufferRecord[idx] = NULL;
+    }
     else
+    {
       r = cd.m_BufferRecord[idx] =
           GetResourceManager()->GetResourceRecord(BufferRes(GetCtx(), buffers[0]));
+
+      if(r == NULL)
+      {
+        RDCERR("Called glBindBuffersBase with unrecognised or deleted buffer");
+        return;
+      }
+    }
 
     if(target == eGL_ATOMIC_COUNTER_BUFFER)
       cd.m_MaxAtomicBind = RDCMAX((GLint)first + count, cd.m_MaxAtomicBind);
@@ -1605,7 +1668,7 @@ void WrappedOpenGL::glBindBuffersBase(GLenum target, GLuint first, GLsizei count
           GetResourceManager()->GetResourceRecord(BufferRes(GetCtx(), buffers[i]));
 
       // it's legal to re-type buffers, generate another BindBuffer chunk to rename
-      if(bufrecord->datatype != target)
+      if(bufrecord && bufrecord->datatype != target)
       {
         Chunk *chunk = NULL;
 
@@ -1762,10 +1825,20 @@ void WrappedOpenGL::glBindBuffersRange(GLenum target, GLuint first, GLsizei coun
     size_t idx = BufferIdx(target);
 
     if(buffers == NULL || buffers[0] == 0)
+    {
       cd.m_BufferRecord[idx] = NULL;
+    }
     else
+    {
       cd.m_BufferRecord[idx] =
           GetResourceManager()->GetResourceRecord(BufferRes(GetCtx(), buffers[0]));
+
+      if(cd.m_BufferRecord[idx] == NULL)
+      {
+        RDCERR("Called glBindBuffersRange with unrecognised or deleted buffer");
+        return;
+      }
+    }
 
     if(target == eGL_ATOMIC_COUNTER_BUFFER)
       cd.m_MaxAtomicBind = RDCMAX((GLint)first + count, cd.m_MaxAtomicBind);
@@ -1819,7 +1892,7 @@ void WrappedOpenGL::glBindBuffersRange(GLenum target, GLuint first, GLsizei coun
             GetResourceManager()->GetResourceRecord(BufferRes(GetCtx(), buffers[i]));
 
         // it's legal to re-type buffers, generate another BindBuffer chunk to rename
-        if(r->datatype != target)
+        if(r && r->datatype != target)
         {
           Chunk *chunk = NULL;
 
@@ -2249,6 +2322,12 @@ void *WrappedOpenGL::glMapNamedBufferRangeEXT(GLuint buffer, GLintptr offset, GL
   {
     GLResourceRecord *record = GetResourceManager()->GetResourceRecord(BufferRes(GetCtx(), buffer));
 
+    if(!record)
+    {
+      RDCERR("Called glMapNamedBufferRange with unrecognised or deleted buffer");
+      return GL.glMapNamedBufferRangeEXT(buffer, offset, length, access);
+    }
+
     // if the buffer was recently orphaned, unset the flag. If the map is unsynchronised then sync
     // ourselves to allow our dummy upload of uninitialised 0xdddddddd to complete.
     if(record->Map.orphaned)
@@ -2597,6 +2676,13 @@ GLboolean WrappedOpenGL::glUnmapNamedBufferEXT(GLuint buffer)
   if(IsCaptureMode(m_State))
   {
     GLResourceRecord *record = GetResourceManager()->GetResourceRecord(BufferRes(GetCtx(), buffer));
+
+    if(!record)
+    {
+      RDCERR("Called glUnmapNamedBuffer with unrecognised or deleted buffer");
+      return GL.glUnmapNamedBufferEXT(buffer);
+    }
+
     auto status = record->Map.status;
 
     if(IsActiveCapturing(m_State))
@@ -2789,6 +2875,9 @@ void WrappedOpenGL::glFlushMappedNamedBufferRangeEXT(GLuint buffer, GLintptr off
   GLResourceRecord *record = GetResourceManager()->GetResourceRecord(BufferRes(GetCtx(), buffer));
   RDCASSERTMSG("Couldn't identify object passed to function. Mismatched or bad GLuint?", record,
                buffer);
+
+  if(!record)
+    return;
 
   if(IsBackgroundCapturing(m_State))
   {

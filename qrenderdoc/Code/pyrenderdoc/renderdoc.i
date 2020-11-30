@@ -52,6 +52,10 @@
 
 %rename("string") "SDObjectData::str";
 
+// convenience - in C++ we have both duplicating and non-duplicating adds, but in python we only
+// expose the duplicating add. Rename it to be simpler
+%rename("AddChild") "SDObject::DuplicateAndAddChild";
+
 %begin %{
   #undef slots
 %}
@@ -82,6 +86,7 @@
 // completely ignore types that we custom convert to/from a native python type
 %ignore rdcdatetime;
 %ignore rdcstr;
+%ignore rdcinflexiblestr;
 %ignore rdcliteral;
 %ignore rdcpair;
 %ignore bytebuf;
@@ -189,6 +194,7 @@
 }
 
 SIMPLE_TYPEMAPS(rdcstr)
+SIMPLE_TYPEMAPS(rdcinflexiblestr)
 SIMPLE_TYPEMAPS(rdcdatetime)
 SIMPLE_TYPEMAPS(bytebuf)
 

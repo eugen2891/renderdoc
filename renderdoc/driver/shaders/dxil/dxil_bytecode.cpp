@@ -67,6 +67,7 @@ enum class KnownBlocks : uint32_t
   METADATA_BLOCK = 15,
   METADATA_ATTACHMENT = 16,
   TYPE_BLOCK = 17,
+  USELIST_BLOCK = 18,
 };
 
 enum class ModuleRecord : uint32_t
@@ -375,14 +376,17 @@ void ParseConstant(const LLVMBC::BlockOrRecord &constant, const Type *&curType,
       {
         const Constant *member = getConstant(m);
 
-        if(member)
+        if(member && member->type)
         {
           v.members.push_back(*member);
         }
         else
         {
-          v.members.push_back(Constant());
-          RDCERR("Index %llu out of bounds for constants array", m);
+          Constant c;
+          c.type = NULL;
+          c.val.u64v[0] = m;
+          v.members.push_back(c);
+          RDCWARN("Index %llu out of bounds for constants array, possible forward reference", m);
         }
       }
     }
@@ -962,6 +966,37 @@ Program::Program(const byte *bytes, size_t length)
                           m_Constants.push_back(v);
                         });
         }
+
+        // post-patch up contants with members that are references to future constants (blech!)
+        for(Constant &c : m_Constants)
+        {
+          if(c.members.empty())
+            continue;
+
+          for(Constant &m : c.members)
+          {
+            if(m.type == NULL)
+            {
+              if(m.val.u64v[0] > 0)
+              {
+                size_t idx = (size_t)m.val.u64v[0];
+                if(idx < m_Constants.size())
+                {
+                  m = m_Constants[idx];
+                }
+                else
+                {
+                  m = Constant();
+                  RDCERR("Couldn't resolve constant %zu", idx);
+                }
+              }
+              else
+              {
+                RDCERR("Unexpected member with no type but no forward-index constant value");
+              }
+            }
+          }
+        }
       }
       else if(IS_KNOWN(rootchild.id, KnownBlocks::VALUE_SYMTAB_BLOCK))
       {
@@ -1145,6 +1180,29 @@ Program::Program(const byte *bytes, size_t length)
                               });
               }
 
+              // post-patch up contants with members that are references to future constants
+              // (blech!)
+              for(Constant &c : f.constants)
+              {
+                if(c.members.empty())
+                  continue;
+
+                for(Constant &m : c.members)
+                {
+                  if(m.type == NULL)
+                  {
+                    if(m.val.u64v[0] > 0)
+                    {
+                      m = *getConstant(m.val.u64v[0]);
+                    }
+                    else
+                    {
+                      RDCERR("Unexpected member with no type but no forward-index constant value");
+                    }
+                  }
+                }
+              }
+
               instrSymbolStart = m_Symbols.size();
             }
             else if(IS_KNOWN(funcChild.id, KnownBlocks::METADATA_BLOCK))
@@ -1289,6 +1347,10 @@ Program::Program(const byte *bytes, size_t length)
                 else
                   f.instructions[(size_t)meta.ops[0]].attachedMeta.swap(attach);
               }
+            }
+            else if(IS_KNOWN(funcChild.id, KnownBlocks::USELIST_BLOCK))
+            {
+              RDCDEBUG("Ignoring uselist block");
             }
             else
             {

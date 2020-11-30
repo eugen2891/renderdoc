@@ -165,6 +165,104 @@ HRESULT STDMETHODCALLTYPE WrappedDownlevelDevice::QueryVideoMemoryInfo(
   return m_pDevice.QueryVideoMemoryInfo(NodeIndex, MemorySegmentGroup, pVideoMemoryInfo);
 }
 
+HRESULT STDMETHODCALLTYPE WrappedID3D12SharingContract::QueryInterface(REFIID riid, void **ppvObject)
+{
+  return m_pDevice.QueryInterface(riid, ppvObject);
+}
+
+ULONG STDMETHODCALLTYPE WrappedID3D12SharingContract::AddRef()
+{
+  return m_pDevice.AddRef();
+}
+
+ULONG STDMETHODCALLTYPE WrappedID3D12SharingContract::Release()
+{
+  return m_pDevice.Release();
+}
+
+ID3DDevice *WrappedID3D12SharingContract::GetD3DDevice()
+{
+  return &m_pDevice;
+}
+
+UINT WrappedID3D12SharingContract::GetWidth()
+{
+  D3D12_RESOURCE_DESC desc = m_pPresentSource->GetDesc();
+  return (UINT)desc.Width;
+}
+
+UINT WrappedID3D12SharingContract::GetHeight()
+{
+  D3D12_RESOURCE_DESC desc = m_pPresentSource->GetDesc();
+  return desc.Height;
+}
+
+DXGI_FORMAT WrappedID3D12SharingContract::GetFormat()
+{
+  D3D12_RESOURCE_DESC desc = m_pPresentSource->GetDesc();
+  return desc.Format;
+}
+
+HWND WrappedID3D12SharingContract::GetHWND()
+{
+  return m_pPresentHWND;
+}
+
+void STDMETHODCALLTYPE WrappedID3D12SharingContract::Present(_In_ ID3D12Resource *pResource,
+                                                             UINT Subresource, _In_ HWND window)
+{
+  // this is similar to the downlevel queue present
+
+  if(m_pPresentHWND != NULL)
+  {
+    // don't let the device actually release any refs on the resource, just make it release internal
+    // resources
+    m_pPresentSource->AddRef();
+    m_pDevice.ReleaseSwapchainResources(this, 0, NULL, NULL);
+  }
+
+  if(m_pPresentHWND != window)
+  {
+    if(m_pPresentHWND != NULL)
+    {
+      Keyboard::RemoveInputWindow(WindowingSystem::Win32, m_pPresentHWND);
+      RenderDoc::Inst().RemoveFrameCapturer(m_pDevice.GetFrameCapturerDevice(), m_pPresentHWND);
+    }
+
+    Keyboard::AddInputWindow(WindowingSystem::Win32, window);
+
+    RenderDoc::Inst().AddFrameCapturer(m_pDevice.GetFrameCapturerDevice(), window,
+                                       m_pDevice.GetFrameCapturer());
+  }
+
+  m_pPresentSource = pResource;
+  m_pPresentHWND = window;
+
+  m_pDevice.WrapSwapchainBuffer(this, GetFormat(), 0, m_pPresentSource);
+
+  m_pDevice.Present(NULL, this, 0, 0);
+
+  m_pReal->Present(Unwrap(pResource), Subresource, window);
+}
+
+void STDMETHODCALLTYPE WrappedID3D12SharingContract::SharedFenceSignal(_In_ ID3D12Fence *pFence,
+                                                                       UINT64 FenceValue)
+{
+  m_pReal->SharedFenceSignal(Unwrap(pFence), FenceValue);
+}
+
+void STDMETHODCALLTYPE WrappedID3D12SharingContract::BeginCapturableWork(_In_ REFGUID guid)
+{
+  // undocumented what this does
+  m_pReal->BeginCapturableWork(guid);
+}
+
+void STDMETHODCALLTYPE WrappedID3D12SharingContract::EndCapturableWork(_In_ REFGUID guid)
+{
+  // undocumented what this does
+  m_pReal->EndCapturableWork(guid);
+}
+
 HRESULT STDMETHODCALLTYPE WrappedDRED::QueryInterface(REFIID riid, void **ppvObject)
 {
   return m_pDevice.QueryInterface(riid, ppvObject);
@@ -279,6 +377,86 @@ HRESULT STDMETHODCALLTYPE WrappedCompatibilityDevice::ReflectSharedProperties(
   return m_pReal->ReflectSharedProperties(Unwrap(pHeapOrResource), ReflectType, pData, DataSize);
 }
 
+HRESULT STDMETHODCALLTYPE WrappedNVAPI12::QueryInterface(REFIID riid, void **ppvObject)
+{
+  return E_NOINTERFACE;
+}
+
+ULONG STDMETHODCALLTYPE WrappedNVAPI12::AddRef()
+{
+  return 1;
+}
+
+ULONG STDMETHODCALLTYPE WrappedNVAPI12::Release()
+{
+  return 1;
+}
+
+BOOL STDMETHODCALLTYPE WrappedNVAPI12::SetReal(IUnknown *)
+{
+  // shouldn't be called on capture, do nothing
+  return FALSE;
+}
+
+IUnknown *STDMETHODCALLTYPE WrappedNVAPI12::GetReal()
+{
+  return m_pDevice.GetReal();
+}
+
+BOOL STDMETHODCALLTYPE WrappedNVAPI12::SetShaderExtUAV(DWORD space, DWORD reg, BOOL global)
+{
+  m_pDevice.SetShaderExtUAV(GPUVendor::nVidia, reg, space, global ? true : false);
+  return TRUE;
+}
+
+HRESULT STDMETHODCALLTYPE WrappedAGS12::QueryInterface(REFIID riid, void **ppvObject)
+{
+  return E_NOINTERFACE;
+}
+
+ULONG STDMETHODCALLTYPE WrappedAGS12::AddRef()
+{
+  return 1;
+}
+
+ULONG STDMETHODCALLTYPE WrappedAGS12::Release()
+{
+  return 1;
+}
+
+IUnknown *STDMETHODCALLTYPE WrappedAGS12::GetReal()
+{
+  return m_pDevice.GetReal();
+}
+
+BOOL STDMETHODCALLTYPE WrappedAGS12::SetShaderExtUAV(DWORD space, DWORD reg)
+{
+  m_pDevice.SetShaderExtUAV(GPUVendor::AMD, reg, space, true);
+  return TRUE;
+}
+
+HRESULT STDMETHODCALLTYPE WrappedAGS12::CreateD3D11(IDXGIAdapter *, D3D_DRIVER_TYPE, HMODULE, UINT,
+                                                    CONST D3D_FEATURE_LEVEL *, UINT FeatureLevels,
+                                                    UINT, CONST DXGI_SWAP_CHAIN_DESC *,
+                                                    IDXGISwapChain **, ID3D11Device **,
+                                                    D3D_FEATURE_LEVEL *, ID3D11DeviceContext **)
+{
+  // shouldn't be called on capture
+  return E_NOTIMPL;
+}
+HRESULT STDMETHODCALLTYPE WrappedAGS12::CreateD3D12(IUnknown *pAdapter,
+                                                    D3D_FEATURE_LEVEL MinimumFeatureLevel,
+                                                    REFIID riid, void **ppDevice)
+{
+  // shouldn't be called on capture
+  return E_NOTIMPL;
+}
+
+BOOL STDMETHODCALLTYPE WrappedAGS12::ExtensionsSupported()
+{
+  return FALSE;
+}
+
 WrappedID3D12Device::WrappedID3D12Device(ID3D12Device *realDevice, D3D12InitParams params,
                                          bool enabledDebugLayer)
     : m_RefCounter(realDevice, false),
@@ -288,7 +466,10 @@ WrappedID3D12Device::WrappedID3D12Device(ID3D12Device *realDevice, D3D12InitPara
       m_WrappedDownlevel(*this),
       m_DRED(*this),
       m_DREDSettings(*this),
-      m_CompatDevice(*this)
+      m_SharingContract(*this),
+      m_CompatDevice(*this),
+      m_WrappedNVAPI(*this),
+      m_WrappedAGS(*this)
 {
   if(RenderDoc::Inst().GetCrashHandler())
     RenderDoc::Inst().GetCrashHandler()->RegisterMemoryRegion(this, sizeof(WrappedID3D12Device));
@@ -310,6 +491,8 @@ WrappedID3D12Device::WrappedID3D12Device(ID3D12Device *realDevice, D3D12InitPara
   m_pDevice4 = NULL;
   m_pDevice5 = NULL;
   m_pDevice6 = NULL;
+  m_pDevice7 = NULL;
+  m_pDevice8 = NULL;
   m_pDownlevel = NULL;
   if(m_pDevice)
   {
@@ -319,11 +502,17 @@ WrappedID3D12Device::WrappedID3D12Device(ID3D12Device *realDevice, D3D12InitPara
     m_pDevice->QueryInterface(__uuidof(ID3D12Device4), (void **)&m_pDevice4);
     m_pDevice->QueryInterface(__uuidof(ID3D12Device5), (void **)&m_pDevice5);
     m_pDevice->QueryInterface(__uuidof(ID3D12Device6), (void **)&m_pDevice6);
+    m_pDevice->QueryInterface(__uuidof(ID3D12Device7), (void **)&m_pDevice7);
+    m_pDevice->QueryInterface(__uuidof(ID3D12Device8), (void **)&m_pDevice8);
     m_pDevice->QueryInterface(__uuidof(ID3D12DeviceRemovedExtendedData), (void **)&m_DRED.m_pReal);
+    m_pDevice->QueryInterface(__uuidof(ID3D12DeviceRemovedExtendedData1), (void **)&m_DRED.m_pReal1);
     m_pDevice->QueryInterface(__uuidof(ID3D12DeviceRemovedExtendedDataSettings),
                               (void **)&m_DREDSettings.m_pReal);
+    m_pDevice->QueryInterface(__uuidof(ID3D12DeviceRemovedExtendedDataSettings1),
+                              (void **)&m_DREDSettings.m_pReal1);
     m_pDevice->QueryInterface(__uuidof(ID3D12DeviceDownlevel), (void **)&m_pDownlevel);
     m_pDevice->QueryInterface(__uuidof(ID3D12CompatibilityDevice), (void **)&m_CompatDevice.m_pReal);
+    m_pDevice->QueryInterface(__uuidof(ID3D12SharingContract), (void **)&m_SharingContract.m_pReal);
 
     for(size_t i = 0; i < ARRAY_COUNT(m_DescriptorIncrements); i++)
       m_DescriptorIncrements[i] =
@@ -377,7 +566,7 @@ WrappedID3D12Device::WrappedID3D12Device(ID3D12Device *realDevice, D3D12InitPara
 
     if(realDevice)
     {
-      m_ResourceList = new std::map<ResourceId, WrappedID3D12Resource1 *>();
+      m_ResourceList = new std::map<ResourceId, WrappedID3D12Resource *>();
       m_PipelineList = new rdcarray<WrappedID3D12PipelineState *>();
     }
 
@@ -598,9 +787,14 @@ WrappedID3D12Device::~WrappedID3D12Device()
   SAFE_DELETE(m_ResourceManager);
 
   SAFE_RELEASE(m_DRED.m_pReal);
+  SAFE_RELEASE(m_DRED.m_pReal1);
   SAFE_RELEASE(m_DREDSettings.m_pReal);
+  SAFE_RELEASE(m_DREDSettings.m_pReal1);
   SAFE_RELEASE(m_CompatDevice.m_pReal);
+  SAFE_RELEASE(m_SharingContract.m_pReal);
   SAFE_RELEASE(m_pDownlevel);
+  SAFE_RELEASE(m_pDevice8);
+  SAFE_RELEASE(m_pDevice7);
   SAFE_RELEASE(m_pDevice6);
   SAFE_RELEASE(m_pDevice5);
   SAFE_RELEASE(m_pDevice4);
@@ -627,6 +821,9 @@ WrappedID3D12Device::~WrappedID3D12Device()
   SAFE_DELETE(m_PipelineList);
 
   delete m_Replay;
+
+  SAFE_RELEASE(m_ReplayNVAPI);
+  SAFE_RELEASE(m_ReplayAGS);
 
   if(RenderDoc::Inst().GetCrashHandler())
     RenderDoc::Inst().GetCrashHandler()->UnregisterMemoryRegion(this);
@@ -657,6 +854,11 @@ HRESULT WrappedID3D12Device::QueryInterface(REFIID riid, void **ppvObject)
 
   static const GUID ID3D12CompatibilityDevice_uuid = {
       0x8f1c0e3c, 0xfae3, 0x4a82, {0xb0, 0x98, 0xbf, 0xe1, 0x70, 0x82, 0x07, 0xff}};
+
+  // unknown/undocumented internal interface
+  // {de18ef3a-0x2089-0x4936-0xa3 0xf3- 0xec 0x78 0x7a 0xc6 0xa4 0x0d}
+  static const GUID ID3D12DeviceDriverDetails_RS5_uuid = {
+      0xde18ef3a, 0x2089, 0x4936, {0xa3, 0xf3, 0xec, 0x78, 0x7a, 0xc6, 0xa4, 0x0d}};
 
   HRESULT hr = S_OK;
 
@@ -816,11 +1018,29 @@ HRESULT WrappedID3D12Device::QueryInterface(REFIID riid, void **ppvObject)
   }
   else if(riid == __uuidof(ID3D12Device7))
   {
-    return E_NOINTERFACE;
+    if(m_pDevice7)
+    {
+      AddRef();
+      *ppvObject = (ID3D12Device7 *)this;
+      return S_OK;
+    }
+    else
+    {
+      return E_NOINTERFACE;
+    }
   }
   else if(riid == __uuidof(ID3D12Device8))
   {
-    return E_NOINTERFACE;
+    if(m_pDevice8)
+    {
+      AddRef();
+      *ppvObject = (ID3D12Device8 *)this;
+      return S_OK;
+    }
+    else
+    {
+      return E_NOINTERFACE;
+    }
   }
   else if(riid == __uuidof(ID3D12DeviceDownlevel))
   {
@@ -841,6 +1061,12 @@ HRESULT WrappedID3D12Device::QueryInterface(REFIID riid, void **ppvObject)
         "Returning a dummy ID3D12InfoQueue that does nothing. This ID3D12InfoQueue will not work!");
     *ppvObject = (ID3D12InfoQueue *)&m_DummyInfoQueue;
     m_DummyInfoQueue.AddRef();
+    return S_OK;
+  }
+  else if(riid == __uuidof(INVAPID3DDevice))
+  {
+    // don't addref, this is an internal interface so we just don't addref at all
+    *ppvObject = (INVAPID3DDevice *)&m_WrappedNVAPI;
     return S_OK;
   }
   else if(riid == __uuidof(ID3D12DebugDevice))
@@ -918,12 +1144,38 @@ HRESULT WrappedID3D12Device::QueryInterface(REFIID riid, void **ppvObject)
       return E_NOINTERFACE;
     }
   }
+  else if(riid == __uuidof(ID3D12DeviceRemovedExtendedData1))
+  {
+    if(m_DRED.m_pReal1)
+    {
+      AddRef();
+      *ppvObject = (ID3D12DeviceRemovedExtendedData1 *)&m_DRED;
+      return S_OK;
+    }
+    else
+    {
+      return E_NOINTERFACE;
+    }
+  }
   else if(riid == __uuidof(ID3D12DeviceRemovedExtendedDataSettings))
   {
     if(m_DREDSettings.m_pReal)
     {
       AddRef();
       *ppvObject = (ID3D12DeviceRemovedExtendedDataSettings *)&m_DREDSettings;
+      return S_OK;
+    }
+    else
+    {
+      return E_NOINTERFACE;
+    }
+  }
+  else if(riid == __uuidof(ID3D12DeviceRemovedExtendedDataSettings1))
+  {
+    if(m_DREDSettings.m_pReal1)
+    {
+      AddRef();
+      *ppvObject = (ID3D12DeviceRemovedExtendedDataSettings1 *)&m_DREDSettings;
       return S_OK;
     }
     else
@@ -950,12 +1202,34 @@ HRESULT WrappedID3D12Device::QueryInterface(REFIID riid, void **ppvObject)
       return E_NOINTERFACE;
     }
   }
-  else
+  else if(riid == __uuidof(ID3D12SharingContract))
   {
-    WarnUnknownGUID("ID3D12Device", riid);
+    if(m_SharingContract.m_pReal)
+    {
+      AddRef();
+      *ppvObject = (ID3D12SharingContract *)&m_SharingContract;
+      return S_OK;
+    }
+    else
+    {
+      return E_NOINTERFACE;
+    }
+  }
+  else if(riid == ID3D12DeviceDriverDetails_RS5_uuid)
+  {
+    static bool printed = false;
+    if(!printed)
+    {
+      RDCWARN(
+          "Querying ID3D12Device for unsupported/undocumented interface: "
+          "ID3D12DeviceDriverDetails_RS5");
+      printed = true;
+    }
+    // return the real thing unwrapped and hope this is OK
+    return m_pDevice->QueryInterface(riid, ppvObject);
   }
 
-  return m_RefCounter.QueryInterface(riid, ppvObject);
+  return m_RefCounter.QueryInterface("ID3D12Device", riid, ppvObject);
 }
 
 ID3D12Resource *WrappedID3D12Device::GetUploadBuffer(uint64_t chunkOffset, uint64_t byteSize)
@@ -997,6 +1271,8 @@ ID3D12Resource *WrappedID3D12Device::GetUploadBuffer(uint64_t chunkOffset, uint6
 
 void WrappedID3D12Device::ApplyInitialContents()
 {
+  RENDERDOC_PROFILEFUNCTION();
+
   initStateCurBatch = 0;
   initStateCurList = NULL;
 
@@ -1083,7 +1359,7 @@ void WrappedID3D12Device::ReleaseSwapchainResources(IDXGISwapper *swapper, UINT 
     if(!res)
       continue;
 
-    WrappedID3D12Resource1 *wrapped = (WrappedID3D12Resource1 *)res;
+    WrappedID3D12Resource *wrapped = (WrappedID3D12Resource *)res;
     wrapped->ReleaseInternalRef();
     SAFE_RELEASE(wrapped);
   }
@@ -1104,7 +1380,7 @@ void WrappedID3D12Device::NewSwapchainBuffer(IUnknown *backbuffer)
 
   if(pRes)
   {
-    WrappedID3D12Resource1 *wrapped = (WrappedID3D12Resource1 *)pRes;
+    WrappedID3D12Resource *wrapped = (WrappedID3D12Resource *)pRes;
     wrapped->AddInternalRef();
   }
 }
@@ -1114,7 +1390,7 @@ bool WrappedID3D12Device::Serialise_WrapSwapchainBuffer(SerialiserType &ser, IDX
                                                         DXGI_FORMAT bufferFormat, UINT Buffer,
                                                         IUnknown *realSurface)
 {
-  WrappedID3D12Resource1 *pRes = (WrappedID3D12Resource1 *)realSurface;
+  WrappedID3D12Resource *pRes = (WrappedID3D12Resource *)realSurface;
 
   SERIALISE_ELEMENT(Buffer);
   SERIALISE_ELEMENT_LOCAL(SwapbufferID, GetResID(pRes)).TypedAs("ID3D12Resource *"_lit);
@@ -1155,7 +1431,7 @@ bool WrappedID3D12Device::Serialise_WrapSwapchainBuffer(SerialiserType &ser, IDX
     }
     else
     {
-      WrappedID3D12Resource1 *wrapped = new WrappedID3D12Resource1(fakeBB, this);
+      WrappedID3D12Resource *wrapped = new WrappedID3D12Resource(fakeBB, this);
       fakeBB = wrapped;
 
       fakeBB->SetName(L"Swap Chain Buffer");
@@ -1190,14 +1466,14 @@ IUnknown *WrappedID3D12Device::WrapSwapchainBuffer(IDXGISwapper *swapper, DXGI_F
 
     realSurface->Release();
   }
-  else if(WrappedID3D12Resource1::IsAlloc(query))
+  else if(WrappedID3D12Resource::IsAlloc(query))
   {
     // this could be possible if we're doing downlevel presenting
     pRes = query;
   }
   else
   {
-    pRes = new WrappedID3D12Resource1((ID3D12Resource *)realSurface, this);
+    pRes = new WrappedID3D12Resource((ID3D12Resource *)realSurface, this);
 
     ResourceId id = GetResID(pRes);
 
@@ -1212,7 +1488,7 @@ IUnknown *WrappedID3D12Device::WrapSwapchainBuffer(IDXGISwapper *swapper, DXGI_F
       record->DataInSerialiser = false;
       record->Length = 0;
 
-      WrappedID3D12Resource1 *wrapped = (WrappedID3D12Resource1 *)pRes;
+      WrappedID3D12Resource *wrapped = (WrappedID3D12Resource *)pRes;
 
       wrapped->SetResourceRecord(record);
 
@@ -1860,6 +2136,8 @@ void WrappedID3D12Device::StartFrameCapture(void *dev, void *wnd)
 
   RDCLOG("Starting capture");
 
+  WrappedID3D12CommandAllocator::PauseResets();
+
   m_CaptureTimer.Restart();
 
   m_AppControlledCapture = true;
@@ -1930,7 +2208,7 @@ void WrappedID3D12Device::StartFrameCapture(void *dev, void *wnd)
     }
 
     m_RefQueues = m_Queues;
-    m_RefBuffers = WrappedID3D12Resource1::AddRefBuffersBeforeCapture(GetResourceManager());
+    m_RefBuffers = WrappedID3D12Resource::AddRefBuffersBeforeCapture(GetResourceManager());
   }
 
   GetResourceManager()->MarkResourceFrameReferenced(m_ResourceID, eFrameRef_Read);
@@ -1991,7 +2269,7 @@ bool WrappedID3D12Device::EndFrameCapture(void *dev, void *wnd)
       ContainsExecuteIndirect |= (*it)->GetResourceRecord()->ContainsExecuteIndirect;
 
     if(ContainsExecuteIndirect)
-      WrappedID3D12Resource1::RefBuffers(GetResourceManager());
+      WrappedID3D12Resource::RefBuffers(GetResourceManager());
 
     m_State = CaptureState::BackgroundCapturing;
 
@@ -2255,6 +2533,8 @@ bool WrappedID3D12Device::EndFrameCapture(void *dev, void *wnd)
   for(ID3D12Resource *r : m_RefBuffers)
     r->Release();
 
+  WrappedID3D12CommandAllocator::ResumeResets();
+
   GetResourceManager()->MarkUnwrittenResources();
 
   GetResourceManager()->ClearReferencedResources();
@@ -2306,6 +2586,8 @@ bool WrappedID3D12Device::DiscardFrameCapture(void *dev, void *wnd)
 
   for(ID3D12Resource *r : m_RefBuffers)
     r->Release();
+
+  WrappedID3D12CommandAllocator::ResumeResets();
 
   GetResourceManager()->MarkUnwrittenResources();
 
@@ -2661,19 +2943,134 @@ void WrappedID3D12Device::SetName(ID3D12DeviceChild *pResource, const char *Name
   }
 }
 
+template <typename SerialiserType>
+bool WrappedID3D12Device::Serialise_SetShaderExtUAV(SerialiserType &ser, GPUVendor vendor,
+                                                    uint32_t reg, uint32_t space, bool global)
+{
+  SERIALISE_ELEMENT(vendor);
+  SERIALISE_ELEMENT(reg);
+  SERIALISE_ELEMENT(space);
+
+  SERIALISE_CHECK_READ_ERRORS();
+
+  if(IsReplayingAndReading())
+  {
+    m_VendorEXT = vendor;
+    m_GlobalEXTUAV = reg;
+    if(vendor == GPUVendor::nVidia)
+    {
+      if(!m_ReplayNVAPI)
+      {
+        RDCERR("This capture uses nvapi extensions but it failed to initialise.");
+        m_FailedReplayStatus = ReplayStatus::APIUnsupported;
+        return false;
+      }
+      m_ReplayNVAPI->SetShaderExtUAV(space, reg, true);
+    }
+    else if(vendor == GPUVendor::AMD)
+    {
+      // do nothing, it was configured at device create time. This is purely informational
+    }
+    else
+    {
+      RDCERR("This capture uses unexpected %s extensions which are not supported.",
+             ToStr(vendor).c_str());
+      m_FailedReplayStatus = ReplayStatus::APIUnsupported;
+      return false;
+    }
+  }
+
+  return true;
+}
+
+void WrappedID3D12Device::SetShaderExtUAV(GPUVendor vendor, uint32_t reg, uint32_t space, bool global)
+{
+  // just overwrite, we don't expect to switch back and forth on a given device.
+  m_VendorEXT = vendor;
+  if(global)
+  {
+    SCOPED_LOCK(m_EXTUAVLock);
+    m_GlobalEXTUAV = reg;
+    m_GlobalEXTUAVSpace = space;
+    m_InitParams.VendorUAV = reg;
+    m_InitParams.VendorUAVSpace = space;
+  }
+  else
+  {
+    if(m_ThreadLocalEXTUAVSlot == ~0ULL)
+      m_ThreadLocalEXTUAVSlot = Threading::AllocateTLSSlot();
+
+    uint64_t packedVal = 0U;
+
+// on 64-bit we can store both values in the pointer fine.
+#if ENABLED(RDOC_X64)
+    packedVal |= space;
+    packedVal <<= 32U;
+    packedVal |= reg;
+#else
+    // no-one should be writing D3D12 applications in 32-bit, but if they are we assume that the
+    // space and register are less than 16-bit. We error if this would truncate.
+
+    // AMD's space is too big, so we steal 0xFFFF for that space
+    if(reg > 0xFFFFU || space >= 0xFFFFU)
+    {
+      RDCERR("Register %u space %u is too large! Capture this as an 64-bit application", reg, space);
+
+      space = RDCMIN(0xFFFEU, space);
+      reg = RDCMIN(0xFFFFU, space);
+    }
+
+    if(space == 2147420894U)
+      space = 0xFFFFU;
+
+    packedVal |= space;
+    packedVal <<= 16U;
+    packedVal |= reg;
+#endif
+
+    Threading::SetTLSValue(m_ThreadLocalEXTUAVSlot, (void *)(uintptr_t)packedVal);
+  }
+}
+
+INSTANTIATE_FUNCTION_SERIALISED(void, WrappedID3D12Device, SetShaderExtUAV, GPUVendor vendor,
+                                uint32_t reg, uint32_t space, bool global);
+
+void WrappedID3D12Device::GetShaderExtUAV(uint32_t &reg, uint32_t &space)
+{
+  if(m_ThreadLocalEXTUAVSlot != ~0ULL)
+  {
+    // see just above in SetShaderExtUAV for the packing
+    uint64_t threadVal = (uint64_t)(uintptr_t)Threading::GetTLSValue(m_ThreadLocalEXTUAVSlot);
+
+#if ENABLED(RDOC_X64)
+    uint32_t threadReg = (threadVal & 0xFFFFFFFFU);
+    uint32_t threadSpace = ((threadVal >> 32U) & 0xFFFFFFFFU);
+#else
+    uint32_t threadReg = (threadVal & 0xFFFFU);
+    uint32_t threadSpace = ((threadVal >> 16U) & 0xFFFFU);
+
+    if(threadSpace == 0xFFFFU)
+      threadSpace = 2147420894U;
+#endif
+
+    if(threadReg != ~0U)
+    {
+      reg = threadReg;
+      space = threadSpace;
+      return;
+    }
+  }
+
+  SCOPED_LOCK(m_EXTUAVLock);
+  reg = m_GlobalEXTUAV;
+  space = m_GlobalEXTUAVSpace;
+}
+
 HRESULT STDMETHODCALLTYPE WrappedID3D12Device::QueryVideoMemoryInfo(
     UINT NodeIndex, DXGI_MEMORY_SEGMENT_GROUP MemorySegmentGroup,
     _Out_ DXGI_QUERY_VIDEO_MEMORY_INFO *pVideoMemoryInfo)
 {
   return m_pDownlevel->QueryVideoMemoryInfo(NodeIndex, MemorySegmentGroup, pVideoMemoryInfo);
-}
-
-HRESULT STDMETHODCALLTYPE WrappedID3D12Device::SetBackgroundProcessingMode(
-    D3D12_BACKGROUND_PROCESSING_MODE Mode, D3D12_MEASUREMENTS_ACTION MeasurementsAction,
-    _In_opt_ HANDLE hEventToSignalUponCompletion, _Out_opt_ BOOL *pbFurtherMeasurementsDesired)
-{
-  return m_pDevice6->SetBackgroundProcessingMode(
-      Mode, MeasurementsAction, hEventToSignalUponCompletion, pbFurtherMeasurementsDesired);
 }
 
 byte *WrappedID3D12Device::GetTempMemory(size_t s)
@@ -2799,7 +3196,6 @@ void WrappedID3D12Device::CreateInternalResources()
 
   CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, __uuidof(ID3D12CommandAllocator),
                          (void **)&m_Alloc);
-  ((WrappedID3D12CommandAllocator *)m_Alloc)->SetInternal(true);
   InternalRef();
   CreateFence(0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), (void **)&m_GPUSyncFence);
   InternalRef();
@@ -2810,7 +3206,6 @@ void WrappedID3D12Device::CreateInternalResources()
 
   CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, __uuidof(ID3D12CommandAllocator),
                          (void **)&m_DataUploadAlloc);
-  ((WrappedID3D12CommandAllocator *)m_DataUploadAlloc)->SetInternal(true);
   InternalRef();
 
   GetResourceManager()->SetInternalResource(m_DataUploadAlloc);
@@ -3105,6 +3500,14 @@ bool WrappedID3D12Device::ProcessChunk(ReadSerialiser &ser, D3D12Chunk context)
     case D3D12Chunk::CompatDevice_CreateSharedResource:
     case D3D12Chunk::CompatDevice_CreateSharedHeap:
       return Serialise_OpenSharedHandle(ser, NULL, IID(), NULL);
+    case D3D12Chunk::SetShaderExtUAV:
+      return Serialise_SetShaderExtUAV(ser, GPUVendor::Unknown, 0, 0, true);
+    case D3D12Chunk::Device_CreateCommittedResource2:
+      return Serialise_CreateCommittedResource2(ser, NULL, D3D12_HEAP_FLAG_NONE, NULL,
+                                                D3D12_RESOURCE_STATE_COMMON, NULL, NULL, IID(), NULL);
+    case D3D12Chunk::Device_CreatePlacedResource1:
+      return Serialise_CreatePlacedResource1(ser, NULL, 0, NULL, D3D12_RESOURCE_STATE_COMMON, NULL,
+                                             IID(), NULL);
 
     // in order to get a warning if we miss a case, we explicitly handle the list/queue chunks here.
     // If we actually encounter one it's an error (we should hit CaptureBegin first and switch to

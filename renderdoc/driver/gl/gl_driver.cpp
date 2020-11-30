@@ -1028,6 +1028,8 @@ void WrappedOpenGL::DeleteContext(void *contextHandle)
 {
   ContextData &ctxdata = m_ContextData[contextHandle];
 
+  RDCLOG("Deleting context %p", contextHandle);
+
   RenderDoc::Inst().RemoveDeviceFrameCapturer(ctxdata.ctx);
 
   // delete the context
@@ -1049,6 +1051,7 @@ void WrappedOpenGL::DeleteContext(void *contextHandle)
   // if this is the last context in the share group, delete the group.
   if(lastInGroup)
   {
+    RDCLOG("Deleting shader group %p", ctxdata.shareGroup);
     delete ctxdata.shareGroup;
   }
 
@@ -5177,13 +5180,13 @@ ReplayStatus WrappedOpenGL::ContextReplayLog(CaptureState readType, uint32_t sta
 
   if(IsActiveReplaying(m_State) && !m_FetchCounters)
   {
-    for(size_t i = 0; i < 8; i++)
+    for(size_t i = 0; i < MAX_QUERIES; i++)
     {
       GLenum q = QueryEnum(i);
       if(q == eGL_NONE)
         break;
 
-      int indices = IsGLES ? 1 : 8;    // GLES does not support indices
+      int indices = IsGLES ? 1 : MAX_QUERY_INDICES;    // GLES does not support indices
       for(int j = 0; j < indices; j++)
       {
         if(m_ActiveQueries[i][j])
@@ -5633,6 +5636,7 @@ void WrappedOpenGL::ReplayLog(uint32_t startEventID, uint32_t endEventID, Replay
 
   if(!partial)
   {
+    RENDERDOC_PROFILEREGION("ApplyInitialContents");
     GLMarkerRegion apply("!!!!RenderDoc Internal: ApplyInitialContents");
     GetResourceManager()->ApplyInitialContents();
 

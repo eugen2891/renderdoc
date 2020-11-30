@@ -490,7 +490,7 @@ bool WrappedVulkan::PatchIndirectDraw(size_t drawIndex, uint32_t paramStride,
 
       draw.numIndices = arg->indexCount;
       draw.numInstances = arg->instanceCount;
-      draw.vertexOffset = arg->vertexOffset;
+      draw.baseVertex = arg->vertexOffset;
       draw.indexOffset = arg->firstIndex;
       draw.instanceOffset = arg->firstInstance;
 
@@ -535,7 +535,7 @@ bool WrappedVulkan::PatchIndirectDraw(size_t drawIndex, uint32_t paramStride,
       if(SDObject *sub = command->FindChild("firstVertex"))
         sub->data.basic.u = draw.vertexOffset;
       if(SDObject *sub = command->FindChild("vertexOffset"))
-        sub->data.basic.u = draw.vertexOffset;
+        sub->data.basic.u = draw.baseVertex;
       if(SDObject *sub = command->FindChild("firstIndex"))
         sub->data.basic.u = draw.indexOffset;
       if(SDObject *sub = command->FindChild("firstInstance"))
@@ -688,11 +688,16 @@ void WrappedVulkan::InsertDrawsAndRefreshIDs(BakedCmdBufferInfo &cmdBufInfo)
             SDChunk *chunk = m_StructuredFile->chunks[chunkIndex];
 
             uint32_t baseAddedChunk = (uint32_t)m_StructuredFile->chunks.size();
+            m_StructuredFile->chunks.reserve(m_StructuredFile->chunks.size() + eidShift);
             for(int32_t e = 0; e < eidShift; e++)
               m_StructuredFile->chunks.push_back(chunk->Duplicate());
 
             // now copy the subdraw so we're not inserting into the array from itself
             VulkanDrawcallTreeNode node = cmdBufNodes[i + 1];
+
+            cmdBufNodes.resize(cmdBufNodes.size() + eidShift);
+            for(size_t e = cmdBufNodes.size() - 1; e > i + 1 + eidShift; e--)
+              cmdBufNodes[e] = std::move(cmdBufNodes[e - eidShift]);
 
             // then insert enough duplicates
             for(int32_t e = 0; e < eidShift; e++)
@@ -709,7 +714,7 @@ void WrappedVulkan::InsertDrawsAndRefreshIDs(BakedCmdBufferInfo &cmdBufInfo)
               for(rdcpair<ResourceId, EventUsage> &use : node.resourceUsage)
                 use.second.eventId++;
 
-              cmdBufNodes.insert(i + 2 + e, node);
+              cmdBufNodes[i + 2 + e] = node;
             }
           }
         }

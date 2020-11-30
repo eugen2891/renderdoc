@@ -188,7 +188,7 @@ uint32_t Serialiser<SerialiserMode::Reading>::BeginChunk(uint32_t, uint64_t)
     if(name.empty())
       name = "<Unknown Chunk>";
 
-    SDChunk *chunk = new SDChunk(name.c_str());
+    SDChunk *chunk = new SDChunk(name);
     chunk->metadata = m_ChunkMetadata;
 
     m_StructuredFile->chunks.push_back(chunk);
@@ -210,10 +210,8 @@ void Serialiser<SerialiserMode::Reading>::SkipCurrentChunk()
 
     SDObject &current = *m_StructureStack.back();
 
-    current.data.basic.numChildren++;
-    current.data.children.push_back(new SDObject("Opaque chunk"_lit, "Byte Buffer"_lit));
+    SDObject &obj = *current.AddAndOwnChild(new SDObject("Opaque chunk"_lit, "Byte Buffer"_lit));
 
-    SDObject &obj = *current.data.children.back();
     obj.type.basetype = SDBasic::Buffer;
     obj.type.byteSize = m_ChunkMetadata.length;
 
@@ -244,7 +242,7 @@ void Serialiser<SerialiserMode::Reading>::SkipCurrentChunk()
     {
       SDObject &current = *m_StructureStack.back();
 
-      SDObject &obj = *current.data.children.back();
+      SDObject &obj = *current.GetChild(current.NumChildren() - 1);
 
       obj.data.basic.u = m_StructuredFile->buffers.size();
 
@@ -448,7 +446,7 @@ uint32_t Serialiser<SerialiserMode::Writing>::BeginChunk(uint32_t chunkID, uint6
     if(name.empty())
       name = "<Unknown Chunk>";
 
-    SDChunk *chunk = new SDChunk(name.c_str());
+    SDChunk *chunk = new SDChunk(name);
     chunk->metadata = m_ChunkMetadata;
 
     m_StructuredFile->chunks.push_back(chunk);
@@ -591,9 +589,9 @@ void Serialiser<SerialiserMode::Writing>::WriteStructuredFile(const SDFile &file
 
     if(chunk.metadata.flags & SDChunkFlags::OpaqueChunk)
     {
-      RDCASSERT(chunk.data.children.size() == 1);
+      RDCASSERT(chunk.NumChildren() == 1);
 
-      size_t bufID = (size_t)chunk.data.children[0]->data.basic.u;
+      size_t bufID = (size_t)chunk.GetChild(0)->data.basic.u;
       byte *ptr = m_StructuredFile->buffers[bufID]->data();
       size_t len = m_StructuredFile->buffers[bufID]->size();
 
@@ -601,10 +599,10 @@ void Serialiser<SerialiserMode::Writing>::WriteStructuredFile(const SDFile &file
     }
     else
     {
-      for(size_t o = 0; o < chunk.data.children.size(); o++)
+      for(size_t o = 0; o < chunk.NumChildren(); o++)
       {
         // note, we don't need names because we aren't exporting structured data
-        ser->Serialise(""_lit, chunk.data.children[o]);
+        ser->Serialise(""_lit, (SDObject *)chunk.GetChild(o));
       }
     }
 
@@ -700,7 +698,7 @@ void DoSerialise(SerialiserType &ser, StructuredObjectList &el)
   {
     // we also assume that the caller serialising these objects will handle lifetime management.
     if(ser.IsReading())
-      el[c] = new SDObject("", "");
+      el[c] = new SDObject(""_lit, ""_lit);
 
     ser.Serialise("$el"_lit, *el[c]);
   }
@@ -717,9 +715,20 @@ void DoSerialise(SerialiserType &ser, SDObjectData &el)
 template <class SerialiserType>
 void DoSerialise(SerialiserType &ser, SDObject &el)
 {
+  if(ser.IsWriting())
+  {
+    el.PopulateAllChildren();
+  }
+
   SERIALISE_MEMBER(name);
   SERIALISE_MEMBER(type);
   SERIALISE_MEMBER(data);
+
+  if(ser.IsReading())
+  {
+    for(size_t i = 0; i < el.NumChildren(); i++)
+      el.GetChild(i)->m_Parent = &el;
+  }
 }
 
 template <class SerialiserType>
@@ -729,6 +738,12 @@ void DoSerialise(SerialiserType &ser, SDChunk &el)
   SERIALISE_MEMBER(type);
   SERIALISE_MEMBER(data);
   SERIALISE_MEMBER(metadata);
+
+  if(ser.IsReading())
+  {
+    for(size_t i = 0; i < el.NumChildren(); i++)
+      el.GetChild(i)->m_Parent = &el;
+  }
 }
 
 INSTANTIATE_SERIALISE_TYPE(SDChunk);
@@ -754,10 +769,18 @@ void DoSerialise(SerialiserType &ser, SDObject *el)
   {
     case SDBasic::Chunk: RDCERR("Unexpected chunk inside object!"); break;
     case SDBasic::Struct:
-      for(size_t o = 0; o < el->data.children.size(); o++)
-        ser.Serialise(""_lit, el->data.children[o]);
+      for(size_t o = 0; o < el->NumChildren(); o++)
+        ser.Serialise(""_lit, el->GetChild(o));
       break;
-    case SDBasic::Array: ser.Serialise(""_lit, (rdcarray<SDObject *> &)el->data.children); break;
+    case SDBasic::Array:
+    {
+      uint64_t arraySize = el->NumChildren();
+      ser.Serialise(""_lit, arraySize);
+      // ensure all children are ready
+      for(size_t o = 0; o < el->NumChildren(); o++)
+        ser.Serialise(""_lit, el->GetChild(o));
+      break;
+    }
     case SDBasic::Null:
       // nothing to do, we serialised present flag above
       RDCASSERT(el->type.flags & SDTypeFlags::Nullable);
@@ -865,6 +888,12 @@ void DoSerialise(SerialiserType &ser, SDObject *el)
 
 template <>
 rdcstr DoStringise(const rdcstr &el)
+{
+  return el;
+}
+
+template <>
+rdcstr DoStringise(const rdcinflexiblestr &el)
 {
   return el;
 }
@@ -1006,27 +1035,125 @@ Chunk *Chunk::Create(Serialiser<SerialiserMode::Writing> &ser, uint16_t chunkTyp
   ret->m_ChunkType = chunkType;
   ret->m_Data = data;
 
+  if(allocator == NULL)
+  {
 #if ENABLED(RDOC_DEVEL)
-  Atomic::Inc64(&m_LiveChunks);
-  Atomic::ExchAdd64(&m_TotalMem, int64_t(length));
+    Atomic::Inc64(&m_LiveChunks);
+    Atomic::ExchAdd64(&m_TotalMem, int64_t(length));
 #endif
+  }
 
   return ret;
 }
 
-ChunkAllocator::~ChunkAllocator()
+ChunkPagePool::~ChunkPagePool()
 {
-  for(Page &p : freePages)
+  // all allocated pages are in precisely one list, so just free the contents of both lists
+  for(ChunkPage &p : freePages)
   {
     FreeAlignedBuffer(p.chunkBase);
     FreeAlignedBuffer(p.bufferBase);
   }
 
-  for(Page &p : fullPages)
+  for(ChunkPage &p : allocatedPages)
   {
     FreeAlignedBuffer(p.chunkBase);
     FreeAlignedBuffer(p.bufferBase);
   }
+}
+
+ChunkPage ChunkPagePool::AllocPage()
+{
+  if(!freePages.empty())
+  {
+    // if there's a free page, move it to the allocated list and return it
+    ChunkPage free = freePages.back();
+    freePages.pop_back();
+    allocatedPages.push_back(free);
+  }
+  else
+  {
+    // otherwise allocate a new one straight into the allocated list
+    byte *buffers = ::AllocAlignedBuffer(BufferPageSize);
+    byte *chunks = ::AllocAlignedBuffer(ChunkPageSize);
+    allocatedPages.push_back({m_ID++, buffers, buffers, chunks, chunks});
+  }
+
+  return allocatedPages.back();
+}
+
+void ChunkPagePool::Trim()
+{
+  // truly release any currently free pages back to the system
+  for(ChunkPage &p : freePages)
+  {
+    FreeAlignedBuffer(p.chunkBase);
+    FreeAlignedBuffer(p.bufferBase);
+  }
+
+  freePages.clear();
+}
+
+void ChunkPagePool::Reset()
+{
+  // forcibly move all allocated pages into the free list
+  freePages.append(allocatedPages);
+  allocatedPages.clear();
+
+  for(ChunkPage &p : freePages)
+  {
+    // reset head pointers
+    p.bufferHead = p.bufferBase;
+    p.chunkHead = p.chunkBase;
+
+    // assign a new ID so these pages can't get reset again by any allocator currently holding them
+    p.ID = m_ID++;
+  }
+}
+
+void ChunkPagePool::ResetPageSet(const rdcarray<ChunkPage> &pages)
+{
+  // iterate over each page being freed
+  for(const ChunkPage &p : pages)
+  {
+    // try to find it in the allocated page list. This compares by ID, so if the page was already
+    // freed with a pool reset we won't find it at all because it will have a new ID - that's fine.
+    int32_t idx = allocatedPages.indexOf(p);
+    if(idx >= 0)
+    {
+      ChunkPage &alloc = allocatedPages[idx];
+      // give a new ID to be safe
+      alloc.ID = m_ID++;
+      // reset head pointers
+      alloc.bufferHead = alloc.bufferBase;
+      alloc.chunkHead = alloc.chunkBase;
+      // move to free list
+      freePages.push_back(alloc);
+      allocatedPages.erase(idx);
+      continue;
+    }
+  }
+}
+
+ChunkAllocator::~ChunkAllocator()
+{
+  // move any pages we have back to the pool on destruction
+  Reset();
+}
+
+void ChunkAllocator::swap(ChunkAllocator &alloc)
+{
+  if(&m_Pool != &alloc.m_Pool)
+  {
+    RDCERR(
+        "Allocator swap with allocator from another pool! Losing all pages to leak instead of "
+        "crashing");
+    pages.clear();
+    alloc.pages.clear();
+    return;
+  }
+
+  pages.swap(alloc.pages);
 }
 
 byte *ChunkAllocator::AllocAlignedBuffer(uint64_t size)
@@ -1041,101 +1168,25 @@ byte *ChunkAllocator::AllocChunk()
   return AllocateFromPages(true, sizeof(Chunk));
 }
 
-void ChunkAllocator::Trim()
-{
-  for(Page &p : freePages)
-  {
-    FreeAlignedBuffer(p.chunkBase);
-    FreeAlignedBuffer(p.bufferBase);
-  }
-
-  freePages.clear();
-}
-
 void ChunkAllocator::Reset()
 {
-  freePages.append(fullPages);
-  fullPages.clear();
-
-  for(Page &p : freePages)
-  {
-    p.bufferHead = p.bufferBase;
-    p.chunkHead = p.chunkBase;
-  }
-}
-
-void ChunkAllocator::ResetPageSet(const rdcarray<uint32_t> &pages)
-{
-  // any full pages in this set go back into the free pages list
-  for(size_t i = 0; i < fullPages.size();)
-  {
-    Page &p = fullPages[i];
-    if(pages.contains(p.ID))
-    {
-      p.bufferHead = p.bufferBase;
-      p.chunkHead = p.chunkBase;
-      freePages.push_back(p);
-      fullPages.erase(i);
-      continue;
-    }
-    i++;
-  }
-}
-
-rdcarray<uint32_t> ChunkAllocator::GetPageSet()
-{
-  // see if the last free page has been partially used
-  if(!freePages.empty())
-  {
-    Page &p = freePages.back();
-
-    if(p.bufferBase != p.bufferHead || p.chunkBase != p.chunkHead)
-    {
-      usedPages.push_back(freePages.back().ID);
-
-      fullPages.push_back(freePages.back());
-      freePages.pop_back();
-    }
-  }
-
-  rdcarray<uint32_t> ret;
-  ret.swap(usedPages);
-  return ret;
+  m_Pool.ResetPageSet(pages);
+  pages.clear();
 }
 
 byte *ChunkAllocator::AllocateFromPages(bool chunkAlloc, size_t size)
 {
   // if the size can't be satisfied in a page, return NULL and we'll force a full allocation which
   // will be freed on its own
-  if(size > BufferPageSize)
+  if(size > m_Pool.GetBufferPageSize())
     return NULL;
 
-  if(!freePages.empty())
-  {
-    // if the last free page can't satisfy this allocation, retire it to the full list
-    if((chunkAlloc && GetRemainingChunkBytes(freePages.back()) < size) ||
-       (!chunkAlloc && GetRemainingBufferBytes(freePages.back()) < size))
-    {
-      // mark this page as used in the current set
-      usedPages.push_back(freePages.back().ID);
+  // if we don't have a current page, or it can't satisfy the allocation, get a new page from the
+  // pool
+  if(pages.empty() || GetRemainingBytes(chunkAlloc, pages.back()) < size)
+    pages.push_back(m_Pool.AllocPage());
 
-      fullPages.push_back(freePages.back());
-      freePages.pop_back();
-    }
-  }
-
-  // if there are no free pages, allocate a new one
-  if(freePages.empty())
-  {
-    // the first free ID is the sum of the free and full lists, because all pages are in one or the
-    // other
-    uint32_t ID = uint32_t(freePages.size() + fullPages.size());
-    byte *buffers = ::AllocAlignedBuffer(BufferPageSize);
-    byte *chunks = ::AllocAlignedBuffer(ChunkPageSize);
-    freePages.push_back({ID, buffers, buffers, chunks, chunks});
-  }
-
-  Page &p = freePages.back();
+  ChunkPage &p = pages.back();
 
   byte *ret = NULL;
 

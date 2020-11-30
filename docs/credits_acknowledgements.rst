@@ -112,6 +112,22 @@ The following libraries and components are incorporated into RenderDoc, listed h
 
   Used to provide shell thumbnail previews for block compressed DDS files.
 
+* `nvapi open source SDK <http://download.nvidia.com/XFree86/nvapi-open-source-sdk/>`_ - Copyright (c) 2019, NVIDIA CORPORATION. Distributed under the MIT License.
+
+  Used to intercept nvapi calls on D3D11/D3D12.
+
+* `half.hpp <http://half.sourceforge.net/>`_ - Copyright (c) 2012-2019 Christian Rau. Distributed under the MIT License.
+
+  Used to emulate half-precision operations in shader debugging.
+
+* `Superluminal <https://superluminal.eu/>`_ - Copyright (c) 2019-2020 Superluminal. Distributed under the BSD License.
+
+  Used to emit profiling events in development builds.
+
+* `AGS <https://github.com/GPUOpen-LibrariesAndSDKs/AGS_SDK/>`_ - Copyright (c) 2020 Advanced Micro Devices, Inc. Distributed under the MIT License.
+
+  Used to intercept and test AGS calls on D3D11/D3D12.
+
 Thanks
 ------
 
@@ -167,6 +183,7 @@ There have been many people who have helped in the creation of RenderDoc. Whethe
 * Haiyu Zhen
 * Alex Kharlamov
 * Steve Karolewics
+* Kevin McCullough
 
 Contributors
 ------------

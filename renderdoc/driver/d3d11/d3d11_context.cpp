@@ -122,6 +122,7 @@ WrappedID3D11DeviceContext::WrappedID3D11DeviceContext(WrappedID3D11Device *real
     m_pRealContext->QueryInterface(__uuidof(ID3D11VideoContext), (void **)&m_WrappedVideo.m_pReal);
     m_pRealContext->QueryInterface(__uuidof(ID3D11VideoContext1), (void **)&m_WrappedVideo.m_pReal1);
     m_pRealContext->QueryInterface(__uuidof(ID3D11VideoContext2), (void **)&m_WrappedVideo.m_pReal2);
+    m_pRealContext->QueryInterface(__uuidof(ID3D11VideoContext3), (void **)&m_WrappedVideo.m_pReal3);
   }
 
   m_UserAnnotation.SetContext(this);
@@ -224,6 +225,7 @@ WrappedID3D11DeviceContext::~WrappedID3D11DeviceContext()
   SAFE_RELEASE(m_WrappedVideo.m_pReal);
   SAFE_RELEASE(m_WrappedVideo.m_pReal1);
   SAFE_RELEASE(m_WrappedVideo.m_pReal2);
+  SAFE_RELEASE(m_WrappedVideo.m_pReal3);
 
   SAFE_RELEASE(m_pRealContext1);
   SAFE_RELEASE(m_pRealContext2);
@@ -934,6 +936,7 @@ bool WrappedID3D11DeviceContext::ProcessChunk(ReadSerialiser &ser, D3D11Chunk ch
     case D3D11Chunk::OpenSharedResource1:
     case D3D11Chunk::OpenSharedResourceByName:
     case D3D11Chunk::SetShaderDebugPath:
+    case D3D11Chunk::SetShaderExtUAV:
       RDCERR("Unexpected chunk while processing frame: %s", ToStr(chunk).c_str());
       return false;
 
@@ -1002,6 +1005,8 @@ void WrappedID3D11DeviceContext::AddUsage(const DrawcallDescription &d)
   if(!(d.flags & DrawMask))
     return;
 
+  const bool isDispatch = bool(d.flags & DrawFlags::Dispatch);
+
   //////////////////////////////
   // IA
 
@@ -1020,7 +1025,16 @@ void WrappedID3D11DeviceContext::AddUsage(const DrawcallDescription &d)
   const D3D11RenderState::Shader *shArr[6] = {
       &pipe->VS, &pipe->HS, &pipe->DS, &pipe->GS, &pipe->PS, &pipe->CS,
   };
-  for(int s = 0; s < 6; s++)
+
+  int firstShader = 0, numShaders = 5;
+
+  if(isDispatch)
+  {
+    firstShader = 5;
+    numShaders = 1;
+  }
+
+  for(int s = firstShader; s < firstShader + numShaders; s++)
   {
     const D3D11RenderState::Shader &sh = *shArr[s];
 
@@ -1055,7 +1069,7 @@ void WrappedID3D11DeviceContext::AddUsage(const DrawcallDescription &d)
   }
 
   // don't record usage for rasterization pipeline on dispatch calls
-  if(d.flags & DrawFlags::Dispatch)
+  if(isDispatch)
     return;
 
   //////////////////////////////
@@ -1508,16 +1522,13 @@ HRESULT STDMETHODCALLTYPE WrappedID3D11DeviceContext::QueryInterface(REFIID riid
     return m_pDevice->QueryInterface(riid, ppvObject);
   }
   else if(riid == __uuidof(ID3D11VideoContext) || riid == __uuidof(ID3D11VideoContext1) ||
-          riid == __uuidof(ID3D11VideoContext2))
+          riid == __uuidof(ID3D11VideoContext2) || riid == __uuidof(ID3D11VideoContext3))
   {
     return m_WrappedVideo.QueryInterface(riid, ppvObject);
   }
-  else
-  {
-    WarnUnknownGUID("ID3D11DeviceContext", riid);
-  }
 
-  return RefCountDXGIObject::WrapQueryInterface(m_pRealContext, riid, ppvObject);
+  return RefCountDXGIObject::WrapQueryInterface(m_pRealContext, "ID3D11DeviceContext", riid,
+                                                ppvObject);
 }
 
 #pragma region Record Statistics

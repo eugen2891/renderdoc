@@ -1749,6 +1749,11 @@ static void RT_FetchMeshData(IReplayController *r, ICaptureContext &ctx, Populat
     {
       uint64_t readBytes = qMax(maxIdx, maxIdx + 1) * vb.byteStride + maxAttrOffset;
 
+      // if the stride is 0, allow reading at most one float4. This will still get clamped by the
+      // declared vertex buffer size below
+      if(vb.byteStride == 0)
+        readBytes += 16;
+
       offset *= vb.byteStride;
 
       if(vb.byteSize > offset)
@@ -1913,6 +1918,8 @@ BufferViewer::BufferViewer(ICaptureContext &ctx, bool meshview, QWidget *parent)
 {
   ui->setupUi(this);
 
+  ui->render->SetContext(m_Ctx);
+
   byteRangeStart = (RDSpinBox64 *)ui->byteRangeStart;
   byteRangeLength = (RDSpinBox64 *)ui->byteRangeLength;
 
@@ -2075,6 +2082,14 @@ BufferViewer::BufferViewer(ICaptureContext &ctx, bool meshview, QWidget *parent)
       m_Ctx.Extensions().MenuDisplaying(PanelMenu::MeshPreview, extensionsMenu, ui->extensions, {});
     });
   }
+
+  QObject::connect(ui->render, &CustomPaintWidget::mouseMove, this, &BufferViewer::render_mouseMove);
+  QObject::connect(ui->render, &CustomPaintWidget::clicked, this, &BufferViewer::render_clicked);
+  QObject::connect(ui->render, &CustomPaintWidget::keyPress, this, &BufferViewer::render_keyPress);
+  QObject::connect(ui->render, &CustomPaintWidget::keyRelease, this,
+                   &BufferViewer::render_keyRelease);
+  QObject::connect(ui->render, &CustomPaintWidget::mouseWheel, this,
+                   &BufferViewer::render_mouseWheel);
 
   Reset();
 
@@ -2376,12 +2391,12 @@ void BufferViewer::OnCaptureLoaded()
   if(!m_MeshView)
     return;
 
-  WindowingData winData = m_Ctx.CreateWindowingData(ui->render);
+  WindowingData winData = ui->render->GetWidgetWindowingData();
 
   m_Ctx.Replay().BlockInvoke([winData, this](IReplayController *r) {
     m_Output = r->CreateOutput(winData, ReplayOutputType::Mesh);
 
-    ui->render->setOutput(m_Output);
+    ui->render->SetOutput(m_Output);
 
     RT_UpdateAndDisplay(r);
   });
@@ -3371,6 +3386,18 @@ void BufferViewer::ScrollToColumn(RDTableView *view, int column)
   view->verticalScrollBar()->setValue(vs);
 }
 
+void BufferViewer::SetCurrentInstance(int instance)
+{
+  if(ui->instance->isVisible() && ui->instance->isEnabled())
+    ui->instance->setValue(instance);
+}
+
+void BufferViewer::SetCurrentView(int view)
+{
+  if(ui->viewIndex->isVisible() && ui->viewIndex->isEnabled())
+    ui->viewIndex->setValue(view);
+}
+
 void BufferViewer::ViewBuffer(uint64_t byteOffset, uint64_t byteSize, ResourceId id,
                               const rdcstr &format)
 {
@@ -3597,35 +3624,6 @@ void BufferViewer::Reset()
   ui->gsoutData->setColumnWidths({40, 40});
 
   m_BBoxes.clear();
-
-  ICaptureContext *ctx = &m_Ctx;
-
-  // while a capture is loaded, pass NULL into the widget
-  if(!m_Ctx.IsCaptureLoaded())
-    ctx = NULL;
-
-  {
-    CustomPaintWidget *render = new CustomPaintWidget(ctx, this);
-    render->setObjectName(ui->render->objectName());
-    render->setSizePolicy(ui->render->sizePolicy());
-    delete ui->render;
-    ui->render = render;
-    ui->renderContainerGridLayout->addWidget(ui->render, 1, 1, 1, 1);
-  }
-
-  QObject::connect(ui->render, &CustomPaintWidget::mouseMove, this, &BufferViewer::render_mouseMove);
-  QObject::connect(ui->render, &CustomPaintWidget::clicked, this, &BufferViewer::render_clicked);
-  QObject::connect(ui->render, &CustomPaintWidget::keyPress, this, &BufferViewer::render_keyPress);
-  QObject::connect(ui->render, &CustomPaintWidget::keyRelease, this,
-                   &BufferViewer::render_keyRelease);
-  QObject::connect(ui->render, &CustomPaintWidget::mouseWheel, this,
-                   &BufferViewer::render_mouseWheel);
-  updateCheckerboardColours();
-}
-
-void BufferViewer::updateCheckerboardColours()
-{
-  ui->render->setColours(Formatter::DarkCheckerColor(), Formatter::LightCheckerColor());
 }
 
 void BufferViewer::ClearModels()
@@ -4184,12 +4182,13 @@ void BufferViewer::debugVertex()
       m_CurView->model()->data(m_CurView->model()->index(idx.row(), 0), Qt::DisplayRole).toUInt();
   uint32_t index =
       m_CurView->model()->data(m_CurView->model()->index(idx.row(), 1), Qt::DisplayRole).toUInt();
+  uint32_t view = m_Config.curView;
 
   bool done = false;
   ShaderDebugTrace *trace = NULL;
 
-  m_Ctx.Replay().AsyncInvoke([this, &done, &trace, vertid, index](IReplayController *r) {
-    trace = r->DebugVertex(vertid, m_Config.curInstance, index);
+  m_Ctx.Replay().AsyncInvoke([this, &done, &trace, vertid, index, view](IReplayController *r) {
+    trace = r->DebugVertex(vertid, m_Config.curInstance, index, view);
 
     if(trace->debugger == NULL)
     {
@@ -4230,15 +4229,6 @@ void BufferViewer::debugVertex()
   IShaderViewer *s = m_Ctx.DebugShader(&bindMapping, shaderDetails, pipeline, trace, debugContext);
 
   m_Ctx.AddDockWindow(s->Widget(), DockReference::AddTo, this);
-}
-
-void BufferViewer::changeEvent(QEvent *event)
-{
-  if(event->type() == QEvent::PaletteChange || event->type() == QEvent::StyleChange)
-  {
-    updateCheckerboardColours();
-    ui->render->update();
-  }
 }
 
 void BufferViewer::SyncViews(RDTableView *primary, bool selection, bool scroll)

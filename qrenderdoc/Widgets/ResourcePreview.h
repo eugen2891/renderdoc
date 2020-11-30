@@ -25,6 +25,7 @@
 #pragma once
 
 #include <QFrame>
+#include "renderdoc_replay.h"
 
 namespace Ui
 {
@@ -53,7 +54,7 @@ public:
   void clickEvent(QMouseEvent *e);
   void doubleClickEvent(QMouseEvent *e);
 
-  QWidget *thumbWidget();
+  WindowingData GetWidgetWindowingData();
 
   void setActive(bool b)
   {

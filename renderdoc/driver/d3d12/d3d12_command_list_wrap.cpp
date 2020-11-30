@@ -59,6 +59,11 @@ ID3D12GraphicsCommandList5 *WrappedID3D12GraphicsCommandList::GetCrackedList5()
   return Unwrap5(m_Cmd->m_BakedCmdListInfo[m_Cmd->m_LastCmdListID].crackedLists.back());
 }
 
+ID3D12GraphicsCommandList6 *WrappedID3D12GraphicsCommandList::GetCrackedList6()
+{
+  return Unwrap6(m_Cmd->m_BakedCmdListInfo[m_Cmd->m_LastCmdListID].crackedLists.back());
+}
+
 ID3D12GraphicsCommandListX *WrappedID3D12GraphicsCommandList::GetWrappedCrackedList()
 {
   return m_Cmd->m_BakedCmdListInfo[m_Cmd->m_LastCmdListID].crackedLists.back();
@@ -1117,8 +1122,8 @@ bool WrappedID3D12GraphicsCommandList::Serialise_IASetIndexBuffer(SerialiserType
 
       if(pView)
       {
-        WrappedID3D12Resource1::GetResIDFromAddr(pView->BufferLocation, state.ibuffer.buf,
-                                                 state.ibuffer.offs);
+        WrappedID3D12Resource::GetResIDFromAddr(pView->BufferLocation, state.ibuffer.buf,
+                                                state.ibuffer.offs);
         state.ibuffer.bytewidth = (pView->Format == DXGI_FORMAT_R32_UINT ? 4 : 2);
         state.ibuffer.size = pView->SizeInBytes;
       }
@@ -1147,7 +1152,7 @@ void WrappedID3D12GraphicsCommandList::IASetIndexBuffer(const D3D12_INDEX_BUFFER
     m_ListRecord->AddChunk(scope.Get(m_ListRecord->cmdInfo->alloc));
     if(pView)
       m_ListRecord->MarkResourceFrameReferenced(
-          WrappedID3D12Resource1::GetResIDFromAddr(pView->BufferLocation), eFrameRef_Read);
+          WrappedID3D12Resource::GetResIDFromAddr(pView->BufferLocation), eFrameRef_Read);
   }
 }
 
@@ -1200,9 +1205,9 @@ bool WrappedID3D12GraphicsCommandList::Serialise_IASetVertexBuffers(
 
       for(UINT i = 0; i < NumViews; i++)
       {
-        WrappedID3D12Resource1::GetResIDFromAddr(pViews ? pViews[i].BufferLocation : 0,
-                                                 state.vbuffers[StartSlot + i].buf,
-                                                 state.vbuffers[StartSlot + i].offs);
+        WrappedID3D12Resource::GetResIDFromAddr(pViews ? pViews[i].BufferLocation : 0,
+                                                state.vbuffers[StartSlot + i].buf,
+                                                state.vbuffers[StartSlot + i].offs);
 
         state.vbuffers[StartSlot + i].stride = pViews ? pViews[i].StrideInBytes : 0;
         state.vbuffers[StartSlot + i].size = pViews ? pViews[i].SizeInBytes : 0;
@@ -1227,7 +1232,7 @@ void WrappedID3D12GraphicsCommandList::IASetVertexBuffers(UINT StartSlot, UINT N
     m_ListRecord->AddChunk(scope.Get(m_ListRecord->cmdInfo->alloc));
     for(UINT i = 0; pViews && i < NumViews; i++)
       m_ListRecord->MarkResourceFrameReferenced(
-          WrappedID3D12Resource1::GetResIDFromAddr(pViews[i].BufferLocation), eFrameRef_Read);
+          WrappedID3D12Resource::GetResIDFromAddr(pViews[i].BufferLocation), eFrameRef_Read);
   }
 }
 
@@ -1281,11 +1286,11 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SOSetTargets(
       {
         D3D12RenderState::StreamOut &so = state.streamouts[StartSlot + i];
 
-        WrappedID3D12Resource1::GetResIDFromAddr(pViews ? pViews[i].BufferLocation : 0, so.buf,
-                                                 so.offs);
+        WrappedID3D12Resource::GetResIDFromAddr(pViews ? pViews[i].BufferLocation : 0, so.buf,
+                                                so.offs);
 
-        WrappedID3D12Resource1::GetResIDFromAddr(pViews ? pViews[i].BufferFilledSizeLocation : 0,
-                                                 so.countbuf, so.countoffs);
+        WrappedID3D12Resource::GetResIDFromAddr(pViews ? pViews[i].BufferFilledSizeLocation : 0,
+                                                so.countbuf, so.countoffs);
 
         so.size = pViews ? pViews[i].SizeInBytes : 0;
       }
@@ -1309,7 +1314,7 @@ void WrappedID3D12GraphicsCommandList::SOSetTargets(UINT StartSlot, UINT NumView
     m_ListRecord->AddChunk(scope.Get(m_ListRecord->cmdInfo->alloc));
     for(UINT i = 0; pViews && i < NumViews; i++)
       m_ListRecord->MarkResourceFrameReferenced(
-          WrappedID3D12Resource1::GetResIDFromAddr(pViews[i].BufferLocation), eFrameRef_Read);
+          WrappedID3D12Resource::GetResIDFromAddr(pViews[i].BufferLocation), eFrameRef_Read);
   }
 }
 
@@ -1630,12 +1635,13 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SetComputeRootSignature(
       D3D12RenderState &state = m_Cmd->m_BakedCmdListInfo[m_Cmd->m_LastCmdListID].state;
 
       // From the docs
-      // (https://msdn.microsoft.com/en-us/library/windows/desktop/dn903950(v=vs.85).aspx)
-      // "If a root signature is changed on a command list, all previous root signature bindings
-      // become stale and all newly expected bindings must be set before Draw/Dispatch;
-      // otherwise, the behavior is undefined. If the root signature is redundantly set to the
-      // same one currently set, existing root signature bindings do not become stale."
-      if(state.compute.rootsig != GetResID(pRootSignature))
+      // (https://microsoft.github.io/DirectX-Specs/d3d/ResourceBinding.html#command-list-semantics)
+      // "If a root signature is changed on a command list, all previous root arguments become stale
+      // and all newly expected arguments must be set before Draw/Dispatch otherwise behavior is
+      // undefined. If the root signature is redundantly set to the same one currently set, existing
+      // root signature bindings do not become stale."
+      if(Unwrap(GetResourceManager()->GetCurrentAs<ID3D12RootSignature>(state.compute.rootsig)) !=
+         Unwrap(pRootSignature))
         state.compute.sigelems.clear();
       state.compute.rootsig = GetResID(pRootSignature);
     }
@@ -1940,7 +1946,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SetComputeRootConstantBufferVie
     ResourceId id;
     uint64_t offs;
 
-    WrappedID3D12Resource1::GetResIDFromAddr(BufferLocation, id, offs);
+    WrappedID3D12Resource::GetResIDFromAddr(BufferLocation, id, offs);
 
     bool stateUpdate = false;
 
@@ -1992,7 +1998,7 @@ void WrappedID3D12GraphicsCommandList::SetComputeRootConstantBufferView(
 
     ResourceId id;
     UINT64 offs = 0;
-    WrappedID3D12Resource1::GetResIDFromAddr(BufferLocation, id, offs);
+    WrappedID3D12Resource::GetResIDFromAddr(BufferLocation, id, offs);
 
     m_ListRecord->AddChunk(scope.Get(m_ListRecord->cmdInfo->alloc));
     m_ListRecord->MarkResourceFrameReferenced(id, eFrameRef_Read);
@@ -2020,7 +2026,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SetComputeRootShaderResourceVie
     ResourceId id;
     uint64_t offs;
 
-    WrappedID3D12Resource1::GetResIDFromAddr(BufferLocation, id, offs);
+    WrappedID3D12Resource::GetResIDFromAddr(BufferLocation, id, offs);
 
     bool stateUpdate = false;
 
@@ -2072,7 +2078,7 @@ void WrappedID3D12GraphicsCommandList::SetComputeRootShaderResourceView(
 
     ResourceId id;
     UINT64 offs = 0;
-    WrappedID3D12Resource1::GetResIDFromAddr(BufferLocation, id, offs);
+    WrappedID3D12Resource::GetResIDFromAddr(BufferLocation, id, offs);
 
     m_ListRecord->AddChunk(scope.Get(m_ListRecord->cmdInfo->alloc));
     m_ListRecord->MarkResourceFrameReferenced(id, eFrameRef_Read);
@@ -2100,7 +2106,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SetComputeRootUnorderedAccessVi
     ResourceId id;
     uint64_t offs;
 
-    WrappedID3D12Resource1::GetResIDFromAddr(BufferLocation, id, offs);
+    WrappedID3D12Resource::GetResIDFromAddr(BufferLocation, id, offs);
 
     bool stateUpdate = false;
 
@@ -2152,7 +2158,7 @@ void WrappedID3D12GraphicsCommandList::SetComputeRootUnorderedAccessView(
 
     ResourceId id;
     UINT64 offs = 0;
-    WrappedID3D12Resource1::GetResIDFromAddr(BufferLocation, id, offs);
+    WrappedID3D12Resource::GetResIDFromAddr(BufferLocation, id, offs);
 
     m_ListRecord->AddChunk(scope.Get(m_ListRecord->cmdInfo->alloc));
     m_ListRecord->MarkResourceFrameReferenced(id, eFrameRef_Read);
@@ -2206,12 +2212,13 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SetGraphicsRootSignature(
       D3D12RenderState &state = m_Cmd->m_BakedCmdListInfo[m_Cmd->m_LastCmdListID].state;
 
       // From the docs
-      // (https://msdn.microsoft.com/en-us/library/windows/desktop/dn903950(v=vs.85).aspx)
-      // "If a root signature is changed on a command list, all previous root signature bindings
-      // become stale and all newly expected bindings must be set before Draw/Dispatch;
-      // otherwise, the behavior is undefined. If the root signature is redundantly set to the
-      // same one currently set, existing root signature bindings do not become stale."
-      if(state.graphics.rootsig != GetResID(pRootSignature))
+      // (https://microsoft.github.io/DirectX-Specs/d3d/ResourceBinding.html#command-list-semantics)
+      // "If a root signature is changed on a command list, all previous root arguments become stale
+      // and all newly expected arguments must be set before Draw/Dispatch otherwise behavior is
+      // undefined. If the root signature is redundantly set to the same one currently set, existing
+      // root signature bindings do not become stale."
+      if(Unwrap(GetResourceManager()->GetCurrentAs<ID3D12RootSignature>(state.graphics.rootsig)) !=
+         Unwrap(pRootSignature))
         state.graphics.sigelems.clear();
       state.graphics.rootsig = GetResID(pRootSignature);
     }
@@ -2516,7 +2523,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SetGraphicsRootConstantBufferVi
     ResourceId id;
     uint64_t offs;
 
-    WrappedID3D12Resource1::GetResIDFromAddr(BufferLocation, id, offs);
+    WrappedID3D12Resource::GetResIDFromAddr(BufferLocation, id, offs);
 
     bool stateUpdate = false;
 
@@ -2568,7 +2575,7 @@ void WrappedID3D12GraphicsCommandList::SetGraphicsRootConstantBufferView(
 
     ResourceId id;
     UINT64 offs = 0;
-    WrappedID3D12Resource1::GetResIDFromAddr(BufferLocation, id, offs);
+    WrappedID3D12Resource::GetResIDFromAddr(BufferLocation, id, offs);
 
     m_ListRecord->AddChunk(scope.Get(m_ListRecord->cmdInfo->alloc));
     m_ListRecord->MarkResourceFrameReferenced(id, eFrameRef_Read);
@@ -2596,7 +2603,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SetGraphicsRootShaderResourceVi
     ResourceId id;
     uint64_t offs;
 
-    WrappedID3D12Resource1::GetResIDFromAddr(BufferLocation, id, offs);
+    WrappedID3D12Resource::GetResIDFromAddr(BufferLocation, id, offs);
 
     bool stateUpdate = false;
 
@@ -2648,7 +2655,7 @@ void WrappedID3D12GraphicsCommandList::SetGraphicsRootShaderResourceView(
 
     ResourceId id;
     UINT64 offs = 0;
-    WrappedID3D12Resource1::GetResIDFromAddr(BufferLocation, id, offs);
+    WrappedID3D12Resource::GetResIDFromAddr(BufferLocation, id, offs);
 
     m_ListRecord->AddChunk(scope.Get(m_ListRecord->cmdInfo->alloc));
     m_ListRecord->MarkResourceFrameReferenced(id, eFrameRef_Read);
@@ -2676,7 +2683,7 @@ bool WrappedID3D12GraphicsCommandList::Serialise_SetGraphicsRootUnorderedAccessV
     ResourceId id;
     uint64_t offs;
 
-    WrappedID3D12Resource1::GetResIDFromAddr(BufferLocation, id, offs);
+    WrappedID3D12Resource::GetResIDFromAddr(BufferLocation, id, offs);
 
     bool stateUpdate = false;
 
@@ -2728,7 +2735,7 @@ void WrappedID3D12GraphicsCommandList::SetGraphicsRootUnorderedAccessView(
 
     ResourceId id;
     UINT64 offs = 0;
-    WrappedID3D12Resource1::GetResIDFromAddr(BufferLocation, id, offs);
+    WrappedID3D12Resource::GetResIDFromAddr(BufferLocation, id, offs);
 
     m_ListRecord->AddChunk(scope.Get(m_ListRecord->cmdInfo->alloc));
     m_ListRecord->MarkResourceFrameReferenced(id, eFrameRef_Read);
@@ -3623,7 +3630,7 @@ void WrappedID3D12GraphicsCommandList::PatchExecuteIndirect(BakedCmdListInfo &in
         curEvent = &dummy;
       }
 
-      SDChunk *fakeChunk = new SDChunk("");
+      SDChunk *fakeChunk = new SDChunk(""_lit);
       fakeChunk->metadata = baseChunk->metadata;
       fakeChunk->metadata.chunkID = (uint32_t)D3D12Chunk::List_IndirectSubCommand;
 
@@ -4141,7 +4148,7 @@ void WrappedID3D12GraphicsCommandList::ReplayExecuteIndirect(ID3D12GraphicsComma
 
           ResourceId id;
           uint64_t offs = 0;
-          WrappedID3D12Resource1::GetResIDFromAddr(srcVB->BufferLocation, id, offs);
+          WrappedID3D12Resource::GetResIDFromAddr(srcVB->BufferLocation, id, offs);
           RDCASSERT(id != ResourceId());
 
           if(executing)
@@ -4167,7 +4174,7 @@ void WrappedID3D12GraphicsCommandList::ReplayExecuteIndirect(ID3D12GraphicsComma
 
           ResourceId id;
           uint64_t offs = 0;
-          WrappedID3D12Resource1::GetResIDFromAddr(srcIB->BufferLocation, id, offs);
+          WrappedID3D12Resource::GetResIDFromAddr(srcIB->BufferLocation, id, offs);
           RDCASSERT(id != ResourceId());
 
           if(executing)
@@ -4192,7 +4199,7 @@ void WrappedID3D12GraphicsCommandList::ReplayExecuteIndirect(ID3D12GraphicsComma
 
           ResourceId id;
           uint64_t offs = 0;
-          WrappedID3D12Resource1::GetResIDFromAddr(*srcAddr, id, offs);
+          WrappedID3D12Resource::GetResIDFromAddr(*srcAddr, id, offs);
           RDCASSERT(*srcAddr == 0 || id != ResourceId());
 
           const uint32_t rootIdx = arg.Constant.RootParameterIndex;

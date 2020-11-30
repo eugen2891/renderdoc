@@ -258,7 +258,7 @@ public:
       return S_OK;
     }
 
-    return RefCounter12::QueryInterface(riid, ppvObject);
+    return RefCounter12::QueryInterface("ID3D12DeviceChild", riid, ppvObject);
   }
 
   //////////////////////////////
@@ -328,9 +328,12 @@ public:
 
 class WrappedID3D12CommandAllocator : public WrappedDeviceChild12<ID3D12CommandAllocator>
 {
+  static int32_t m_ResetEnabled;
+
 public:
   ALLOCATE_WITH_WRAPPED_POOL(WrappedID3D12CommandAllocator);
 
+  ChunkPagePool allocPool;
   ChunkAllocator alloc;
   bool m_Internal = false;
 
@@ -340,22 +343,21 @@ public:
   };
 
   WrappedID3D12CommandAllocator(ID3D12CommandAllocator *real, WrappedID3D12Device *device)
-      : WrappedDeviceChild12(real, device), alloc(32 * 1024)
+      : WrappedDeviceChild12(real, device), allocPool(32 * 1024), alloc(allocPool)
   {
   }
   virtual ~WrappedID3D12CommandAllocator() { Shutdown(); }
-  void SetInternal(bool internalAlloc) { m_Internal = internalAlloc; }
+  static void PauseResets() { Atomic::Dec32(&m_ResetEnabled); }
+  static void ResumeResets() { Atomic::Inc32(&m_ResetEnabled); }
   //////////////////////////////
   // implement ID3D12CommandAllocator
 
   virtual HRESULT STDMETHODCALLTYPE Reset()
   {
-    if(!m_Internal)
-      m_pDevice->GetCapTransitionLock().ReadLock();
-    if(IsBackgroundCapturing(m_pDevice->GetState()))
+    // reset the allocator. D3D12 munges the pool and the allocator together, so the allocator
+    // becomes redundant as the only pool client and the pool is reset together.
+    if(Atomic::CmpExch32(&m_ResetEnabled, 1, 1) == 1)
       alloc.Reset();
-    if(!m_Internal)
-      m_pDevice->GetCapTransitionLock().ReadUnlock();
     return m_pReal->Reset();
   }
 };
@@ -438,21 +440,21 @@ public:
   }
 };
 
-class WrappedID3D12Fence1 : public WrappedDeviceChild12<ID3D12Fence, ID3D12Fence1>
+class WrappedID3D12Fence : public WrappedDeviceChild12<ID3D12Fence, ID3D12Fence1>
 {
 public:
-  ALLOCATE_WITH_WRAPPED_POOL(WrappedID3D12Fence1);
+  ALLOCATE_WITH_WRAPPED_POOL(WrappedID3D12Fence);
 
   enum
   {
     TypeEnum = Resource_Fence,
   };
 
-  WrappedID3D12Fence1(ID3D12Fence *real, WrappedID3D12Device *device)
+  WrappedID3D12Fence(ID3D12Fence *real, WrappedID3D12Device *device)
       : WrappedDeviceChild12(real, device)
   {
   }
-  virtual ~WrappedID3D12Fence1() { Shutdown(); }
+  virtual ~WrappedID3D12Fence() { Shutdown(); }
   //////////////////////////////
   // implement ID3D12Fence
 
@@ -481,7 +483,7 @@ public:
 };
 
 class WrappedID3D12ProtectedResourceSession
-    : public WrappedDeviceChild12<ID3D12ProtectedResourceSession>
+    : public WrappedDeviceChild12<ID3D12ProtectedResourceSession, ID3D12ProtectedResourceSession1>
 {
 public:
   ALLOCATE_WITH_WRAPPED_POOL(WrappedID3D12ProtectedResourceSession);
@@ -535,23 +537,39 @@ public:
   {
     return m_pReal->GetDesc();
   }
+
+  //////////////////////////////
+  // implement ID3D12ProtectedResourceSession1
+  virtual D3D12_PROTECTED_RESOURCE_SESSION_DESC1 STDMETHODCALLTYPE GetDesc1()
+  {
+    ID3D12ProtectedResourceSession1 *real1 = NULL;
+    m_pReal->QueryInterface(__uuidof(ID3D12ProtectedResourceSession1), (void **)&real1);
+
+    if(!real1)
+      return {};
+
+    D3D12_PROTECTED_RESOURCE_SESSION_DESC1 ret = real1->GetDesc1();
+
+    SAFE_RELEASE(real1);
+    return ret;
+  }
 };
 
-class WrappedID3D12Heap1 : public WrappedDeviceChild12<ID3D12Heap, ID3D12Heap1>
+class WrappedID3D12Heap : public WrappedDeviceChild12<ID3D12Heap, ID3D12Heap1>
 {
 public:
-  ALLOCATE_WITH_WRAPPED_POOL(WrappedID3D12Heap1);
+  ALLOCATE_WITH_WRAPPED_POOL(WrappedID3D12Heap);
 
   enum
   {
     TypeEnum = Resource_Heap,
   };
 
-  WrappedID3D12Heap1(ID3D12Heap *real, WrappedID3D12Device *device)
+  WrappedID3D12Heap(ID3D12Heap *real, WrappedID3D12Device *device)
       : WrappedDeviceChild12(real, device)
   {
   }
-  virtual ~WrappedID3D12Heap1() { Shutdown(); }
+  virtual ~WrappedID3D12Heap() { Shutdown(); }
   //////////////////////////////
   // implement ID3D12Heap
   virtual D3D12_HEAP_DESC STDMETHODCALLTYPE GetDesc() { return m_pReal->GetDesc(); }
@@ -723,6 +741,32 @@ public:
       return false;
     }
 
+    void GetShaderExtSlot(uint32_t &slot, uint32_t &space)
+    {
+      slot = m_ShaderExtSlot;
+      space = m_ShaderExtSpace;
+    }
+
+    void SetShaderExtSlot(uint32_t slot, uint32_t space)
+    {
+      // it doesn't make sense to build the same DXBC with different slots/spaces since it's baked
+      // in.
+
+      if(slot != m_ShaderExtSlot && m_ShaderExtSlot != ~0U)
+        RDCERR(
+            "Unexpected case - different valid slot %u being set for same shader already "
+            "configured with slot %u",
+            slot, m_ShaderExtSlot);
+      if(space != m_ShaderExtSpace && m_ShaderExtSpace != ~0U)
+        RDCERR(
+            "Unexpected case - different valid space %u being set for same shader already "
+            "configured with space %u",
+            space, m_ShaderExtSpace);
+
+      m_ShaderExtSlot = slot;
+      m_ShaderExtSpace = space;
+    }
+
     DXBCKey GetKey() { return m_Key; }
     D3D12_SHADER_BYTECODE GetDesc()
     {
@@ -736,7 +780,8 @@ public:
     {
       if(m_DXBCFile == NULL && !m_Bytecode.empty())
       {
-        m_DXBCFile = new DXBC::DXBCContainer(m_Bytecode, rdcstr());
+        m_DXBCFile = new DXBC::DXBCContainer(m_Bytecode, rdcstr(), GraphicsAPI::D3D12,
+                                             m_ShaderExtSlot, m_ShaderExtSpace);
       }
       return m_DXBCFile;
     }
@@ -766,6 +811,7 @@ public:
     DXBCKey m_Key;
 
     bytebuf m_Bytecode;
+    uint32_t m_ShaderExtSlot = ~0U, m_ShaderExtSpace = ~0U;
 
     bool m_Built;
     DXBC::DXBCContainer *m_DXBCFile;
@@ -851,14 +897,15 @@ public:
   virtual ~WrappedID3D12QueryHeap() { Shutdown(); }
 };
 
-class WrappedID3D12Resource1 : public WrappedDeviceChild12<ID3D12Resource, ID3D12Resource1>
+class WrappedID3D12Resource
+    : public WrappedDeviceChild12<ID3D12Resource, ID3D12Resource1, ID3D12Resource2>
 {
   static GPUAddressRangeTracker m_Addresses;
 
   WriteSerialiser &GetThreadSerialiser();
 
 public:
-  ALLOCATE_WITH_WRAPPED_POOL(WrappedID3D12Resource1, false);
+  ALLOCATE_WITH_WRAPPED_POOL(WrappedID3D12Resource, false);
 
   static void RefBuffers(D3D12ResourceManager *rm);
 
@@ -885,7 +932,7 @@ public:
     TypeEnum = Resource_Resource,
   };
 
-  WrappedID3D12Resource1(ID3D12Resource *real, WrappedID3D12Device *device)
+  WrappedID3D12Resource(ID3D12Resource *real, WrappedID3D12Device *device)
       : WrappedDeviceChild12(real, device)
   {
     if(IsReplayMode(device->GetState()))
@@ -904,7 +951,7 @@ public:
       m_Addresses.AddTo(range);
     }
   }
-  virtual ~WrappedID3D12Resource1();
+  virtual ~WrappedID3D12Resource();
 
   byte *GetMap(UINT Subresource);
   byte *GetShadow(UINT Subresource);
@@ -991,6 +1038,22 @@ public:
 
     return S_OK;
   }
+
+  //////////////////////////////
+  // implement ID3D12Resource2
+  virtual D3D12_RESOURCE_DESC1 STDMETHODCALLTYPE GetDesc1(void)
+  {
+    ID3D12Resource2 *real2 = NULL;
+    m_pReal->QueryInterface(__uuidof(ID3D12Resource2), (void **)&real2);
+
+    if(!real2)
+      return {};
+
+    D3D12_RESOURCE_DESC1 ret = real2->GetDesc1();
+
+    SAFE_RELEASE(real2);
+    return ret;
+  }
 };
 
 class WrappedID3D12RootSignature : public WrappedDeviceChild12<ID3D12RootSignature>
@@ -1012,18 +1075,18 @@ public:
   virtual ~WrappedID3D12RootSignature() { Shutdown(); }
 };
 
-class WrappedID3D12PipelineLibrary1 : public WrappedDeviceChild12<ID3D12PipelineLibrary1>
+class WrappedID3D12PipelineLibrary : public WrappedDeviceChild12<ID3D12PipelineLibrary1>
 {
 public:
-  ALLOCATE_WITH_WRAPPED_POOL(WrappedID3D12PipelineLibrary1);
+  ALLOCATE_WITH_WRAPPED_POOL(WrappedID3D12PipelineLibrary);
 
   enum
   {
     TypeEnum = Resource_PipelineLibrary,
   };
 
-  WrappedID3D12PipelineLibrary1(WrappedID3D12Device *device) : WrappedDeviceChild12(NULL, device) {}
-  virtual ~WrappedID3D12PipelineLibrary1() { Shutdown(); }
+  WrappedID3D12PipelineLibrary(WrappedID3D12Device *device) : WrappedDeviceChild12(NULL, device) {}
+  virtual ~WrappedID3D12PipelineLibrary() { Shutdown(); }
   virtual HRESULT STDMETHODCALLTYPE StorePipeline(_In_opt_ LPCWSTR pName,
                                                   _In_ ID3D12PipelineState *pPipeline)
   {
@@ -1084,13 +1147,13 @@ public:
   D3D12_TYPE_MACRO(ID3D12CommandAllocator); \
   D3D12_TYPE_MACRO(ID3D12CommandSignature); \
   D3D12_TYPE_MACRO(ID3D12DescriptorHeap);   \
-  D3D12_TYPE_MACRO(ID3D12Fence1);           \
-  D3D12_TYPE_MACRO(ID3D12Heap1);            \
+  D3D12_TYPE_MACRO(ID3D12Fence);            \
+  D3D12_TYPE_MACRO(ID3D12Heap);             \
   D3D12_TYPE_MACRO(ID3D12PipelineState);    \
   D3D12_TYPE_MACRO(ID3D12QueryHeap);        \
-  D3D12_TYPE_MACRO(ID3D12Resource1);        \
+  D3D12_TYPE_MACRO(ID3D12Resource);         \
   D3D12_TYPE_MACRO(ID3D12RootSignature);    \
-  D3D12_TYPE_MACRO(ID3D12PipelineLibrary1); \
+  D3D12_TYPE_MACRO(ID3D12PipelineLibrary);  \
   D3D12_TYPE_MACRO(ID3D12ProtectedResourceSession);
 
 // template magic voodoo to unwrap types
@@ -1123,18 +1186,20 @@ ALL_D3D12_TYPES;
 // extra helpers here for '1' or '2' extended interfaces
 #define D3D12_UNWRAP_EXTENDED(iface, ifaceX)                                              \
   template <>                                                                             \
-  struct UnwrapHelper<iface>                                                              \
+  struct UnwrapHelper<ifaceX>                                                             \
   {                                                                                       \
-    typedef CONCAT(Wrapped, ifaceX) Outer;                                                \
+    typedef CONCAT(Wrapped, iface) Outer;                                                 \
     static bool IsAlloc(void *ptr) { return Outer::IsAlloc(ptr); }                        \
     static D3D12ResourceType GetTypeEnum() { return (D3D12ResourceType)Outer::TypeEnum; } \
-    static Outer *FromHandle(iface *wrapped) { return (Outer *)wrapped; }                 \
+    static Outer *FromHandle(ifaceX *wrapped) { return (Outer *)wrapped; }                \
   };
 
 D3D12_UNWRAP_EXTENDED(ID3D12Fence, ID3D12Fence1);
 D3D12_UNWRAP_EXTENDED(ID3D12PipelineLibrary, ID3D12PipelineLibrary1);
 D3D12_UNWRAP_EXTENDED(ID3D12Heap, ID3D12Heap1);
 D3D12_UNWRAP_EXTENDED(ID3D12Resource, ID3D12Resource1);
+D3D12_UNWRAP_EXTENDED(ID3D12Resource, ID3D12Resource2);
+D3D12_UNWRAP_EXTENDED(ID3D12ProtectedResourceSession, ID3D12ProtectedResourceSession1);
 
 D3D12ResourceType IdentifyTypeByPtr(ID3D12Object *ptr);
 

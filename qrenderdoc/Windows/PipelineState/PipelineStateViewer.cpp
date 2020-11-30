@@ -131,6 +131,8 @@ void PipelineStateViewer::OnCaptureClosed()
 
 void PipelineStateViewer::OnEventChanged(uint32_t eventId)
 {
+  RENDERDOC_PROFILEFUNCTION();
+
   if(m_Ctx.APIProps().pipelineType == GraphicsAPI::D3D11)
     setToD3D11();
   else if(m_Ctx.APIProps().pipelineType == GraphicsAPI::D3D12)
@@ -837,60 +839,8 @@ IShaderViewer *PipelineStateViewer::EditShader(ResourceId id, ShaderStage shader
                                                const rdcstr &entry, ShaderCompileFlags compileFlags,
                                                ShaderEncoding encoding, const rdcstrpairs &files)
 {
-  auto saveCallback = [shaderType, id](ICaptureContext *ctx, IShaderViewer *viewer,
-                                       ShaderEncoding shaderEncoding, ShaderCompileFlags flags,
-                                       rdcstr entryFunc, bytebuf shaderBytes) {
-    if(shaderBytes.isEmpty())
-      return;
-
-    ANALYTIC_SET(UIFeatures.ShaderEditing, true);
-
-    QPointer<QObject> ptr(viewer->Widget());
-
-    // invoke off to the ReplayController to replace the capture's shader
-    // with our edited one
-    ctx->Replay().AsyncInvoke([ctx, entryFunc, shaderBytes, shaderEncoding, flags, shaderType, id,
-                               ptr, viewer](IReplayController *r) {
-      rdcstr errs;
-
-      ResourceId from = id;
-      ResourceId to;
-
-      rdctie(to, errs) =
-          r->BuildTargetShader(entryFunc.c_str(), shaderEncoding, shaderBytes, flags, shaderType);
-
-      if(ptr)
-        GUIInvoke::call(ptr, [viewer, errs]() { viewer->ShowErrors(errs); });
-      if(to == ResourceId())
-      {
-        r->RemoveReplacement(from);
-
-        // this GUIInvoke call always needs to go through even if the viewer has been closed.
-        GUIInvoke::call(ctx->GetMainWindow()->Widget(),
-                        [ctx, from]() { ctx->UnregisterReplacement(from); });
-      }
-      else
-      {
-        r->ReplaceResource(from, to);
-
-        GUIInvoke::call(ctx->GetMainWindow()->Widget(),
-                        [ctx, from]() { ctx->RegisterReplacement(from); });
-      }
-    });
-  };
-
-  auto closeCallback = [id](ICaptureContext *ctx) {
-    // remove the replacement on close (we could make this more sophisticated if there
-    // was a place to control replaced resources/shaders).
-    ctx->Replay().AsyncInvoke([ctx, id](IReplayController *r) {
-      if(ctx->IsCaptureLoaded())
-        r->RemoveReplacement(id);
-      GUIInvoke::call(ctx->GetMainWindow()->Widget(), [ctx, id] { ctx->UnregisterReplacement(id); });
-    });
-  };
-
-  IShaderViewer *sv = m_Ctx.EditShader(id, shaderType, entry, files, encoding, compileFlags,
-                                       saveCallback, closeCallback);
+  IShaderViewer *sv =
+      m_Ctx.EditShader(id, shaderType, entry, files, encoding, compileFlags, NULL, NULL);
 
   m_Ctx.AddDockWindow(sv->Widget(), DockReference::AddTo, this);
 
@@ -1244,4 +1194,16 @@ bool PipelineStateViewer::SaveShaderFile(const ShaderReflection *shader)
   }
 
   return true;
+}
+
+void PipelineStateViewer::SelectPipelineStage(PipelineStage stage)
+{
+  if(m_D3D11)
+    m_D3D11->SelectPipelineStage(stage);
+  else if(m_D3D12)
+    m_D3D12->SelectPipelineStage(stage);
+  else if(m_GL)
+    m_GL->SelectPipelineStage(stage);
+  else if(m_Vulkan)
+    m_Vulkan->SelectPipelineStage(stage);
 }

@@ -945,6 +945,7 @@ void GLResourceManager::PrepareTextureInitialContents(ResourceId liveid, Resourc
 
         GLuint msaaTex = tex;
 
+        tex = 0;
         m_Driver->CopyTex2DMSToArray(tex, msaaTex, details.width, details.height, details.depth,
                                      details.samples, details.internalFormat);
 
@@ -2288,7 +2289,9 @@ void GLResourceManager::Apply_InitialState(GLResource live, const GLInitialConte
             }
             else if(details.curType == eGL_TEXTURE_CUBE_MAP_ARRAY ||
                     details.curType == eGL_TEXTURE_1D_ARRAY ||
-                    details.curType == eGL_TEXTURE_2D_ARRAY || details.curType == eGL_TEXTURE_3D)
+                    details.curType == eGL_TEXTURE_2D_ARRAY ||
+                    details.curType == eGL_TEXTURE_2D_MULTISAMPLE_ARRAY ||
+                    details.curType == eGL_TEXTURE_3D)
             {
               if(a.numViews > 1)
               {
@@ -2407,8 +2410,13 @@ void GLResourceManager::Apply_InitialState(GLResource live, const GLInitialConte
       GL.glGetIntegerv(eGL_MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS, &maxCount);
 
       for(int i = 0; i < (int)ARRAY_COUNT(data.Buffer) && i < maxCount; i++)
-        GL.glBindBufferRange(eGL_TRANSFORM_FEEDBACK_BUFFER, i, data.Buffer[i].name,
-                             (GLintptr)data.Offset[i], (GLsizei)data.Size[i]);
+      {
+        if(data.Offset[i] == 0 && data.Size[i] == 0)
+          GL.glBindBufferBase(eGL_TRANSFORM_FEEDBACK_BUFFER, i, data.Buffer[i].name);
+        else
+          GL.glBindBufferRange(eGL_TRANSFORM_FEEDBACK_BUFFER, i, data.Buffer[i].name,
+                               (GLintptr)data.Offset[i], (GLsizei)data.Size[i]);
+      }
 
       GL.glBindTransformFeedback(eGL_TRANSFORM_FEEDBACK, prevfeedback);
     }

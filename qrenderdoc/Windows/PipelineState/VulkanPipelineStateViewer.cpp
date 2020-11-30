@@ -102,6 +102,20 @@ struct VulkanBufferTag
 
 Q_DECLARE_METATYPE(VulkanBufferTag);
 
+struct VulkanTextureTag
+{
+  VulkanTextureTag() { compType = CompType::Typeless; }
+  VulkanTextureTag(ResourceId id, CompType ty)
+  {
+    ID = id;
+    compType = ty;
+  }
+  ResourceId ID;
+  CompType compType;
+};
+
+Q_DECLARE_METATYPE(VulkanTextureTag);
+
 VulkanPipelineStateViewer::VulkanPipelineStateViewer(ICaptureContext &ctx,
                                                      PipelineStateViewer &common, QWidget *parent)
     : QFrame(parent), ui(new Ui::VulkanPipelineStateViewer), m_Ctx(ctx), m_Common(common)
@@ -447,6 +461,11 @@ void VulkanPipelineStateViewer::OnCaptureClosed()
 void VulkanPipelineStateViewer::OnEventChanged(uint32_t eventId)
 {
   setState();
+}
+
+void VulkanPipelineStateViewer::SelectPipelineStage(PipelineStage stage)
+{
+  ui->pipeFlow->setSelectedStage((int)stage);
 }
 
 void VulkanPipelineStateViewer::on_showUnused_toggled(bool checked)
@@ -1124,12 +1143,16 @@ void VulkanPipelineStateViewer::addResourceRow(ShaderReflection *shaderDetails,
 
     for(int idx = firstUsedBind; idx <= lastUsedBind && idx < arrayLength; idx++)
     {
+      bool dynamicUsed = usedSlot;
+
       const VKPipe::BindingElement *descriptorBind = NULL;
       if(slotBinds != NULL)
       {
         descriptorBind = &(*slotBinds)[idx];
 
-        if(!showNode(usedSlot && descriptorBind->dynamicallyUsed, filledSlot))
+        dynamicUsed &= descriptorBind->dynamicallyUsed;
+
+        if(!showNode(dynamicUsed, filledSlot))
           continue;
       }
 
@@ -1172,7 +1195,8 @@ void VulkanPipelineStateViewer::addResourceRow(ShaderReflection *shaderDetails,
           restype = tex->type;
           samples = tex->msSamp;
 
-          tag = QVariant::fromValue(descriptorBind->resourceResourceId);
+          tag = QVariant::fromValue(VulkanTextureTag(descriptorBind->resourceResourceId,
+                                                     descriptorBind->viewFormat.compType));
         }
 
         // if not a texture, it must be a buffer
@@ -1215,6 +1239,9 @@ void VulkanPipelineStateViewer::addResourceRow(ShaderReflection *shaderDetails,
           });
 
           setEmptyRow(node);
+
+          if(!dynamicUsed)
+            setInactiveRow(node);
         }
         else
         {
@@ -1230,7 +1257,7 @@ void VulkanPipelineStateViewer::addResourceRow(ShaderReflection *shaderDetails,
           if(!filledSlot)
             setEmptyRow(node);
 
-          if(!usedSlot)
+          if(!dynamicUsed)
             setInactiveRow(node);
         }
       }
@@ -1247,7 +1274,7 @@ void VulkanPipelineStateViewer::addResourceRow(ShaderReflection *shaderDetails,
         if(!filledSlot)
           setEmptyRow(node);
 
-        if(!usedSlot)
+        if(!dynamicUsed)
           setInactiveRow(node);
       }
       else if(bindType == BindType::Sampler)
@@ -1260,6 +1287,9 @@ void VulkanPipelineStateViewer::addResourceRow(ShaderReflection *shaderDetails,
           });
 
           setEmptyRow(node);
+
+          if(!dynamicUsed)
+            setInactiveRow(node);
         }
         else
         {
@@ -1268,7 +1298,7 @@ void VulkanPipelineStateViewer::addResourceRow(ShaderReflection *shaderDetails,
           if(!filledSlot)
             setEmptyRow(node);
 
-          if(!usedSlot)
+          if(!dynamicUsed)
             setInactiveRow(node);
         }
       }
@@ -1282,6 +1312,9 @@ void VulkanPipelineStateViewer::addResourceRow(ShaderReflection *shaderDetails,
           });
 
           setEmptyRow(node);
+
+          if(!dynamicUsed)
+            setInactiveRow(node);
         }
         else
         {
@@ -1327,7 +1360,7 @@ void VulkanPipelineStateViewer::addResourceRow(ShaderReflection *shaderDetails,
           if(!filledSlot)
             setEmptyRow(node);
 
-          if(!usedSlot)
+          if(!dynamicUsed)
             setInactiveRow(node);
 
           if(bindType == BindType::ImageSampler)
@@ -1340,6 +1373,9 @@ void VulkanPipelineStateViewer::addResourceRow(ShaderReflection *shaderDetails,
               });
 
               setEmptyRow(samplerNode);
+
+              if(!dynamicUsed)
+                setInactiveRow(samplerNode);
             }
             else
             {
@@ -1351,7 +1387,7 @@ void VulkanPipelineStateViewer::addResourceRow(ShaderReflection *shaderDetails,
                 if(!filledSlot)
                   setEmptyRow(samplerNode);
 
-                if(!usedSlot)
+                if(!dynamicUsed)
                   setInactiveRow(samplerNode);
 
                 CombinedSamplerData sampData;
@@ -2471,7 +2507,8 @@ void VulkanPipelineStateViewer::setState()
             {slotname, p.imageResourceId, typeName, w, h, d, a, format, QString()});
 
         if(tex)
-          node->setTag(QVariant::fromValue(p.imageResourceId));
+          node->setTag(
+              QVariant::fromValue(VulkanTextureTag(p.imageResourceId, p.viewFormat.compType)));
 
         if(p.imageResourceId == ResourceId())
         {
@@ -2716,9 +2753,11 @@ void VulkanPipelineStateViewer::resource_itemActivated(RDTreeWidgetItem *item, i
 
   QVariant tag = item->tag();
 
-  if(tag.canConvert<ResourceId>())
+  if(tag.canConvert<VulkanTextureTag>())
   {
-    TextureDescription *tex = m_Ctx.GetTexture(tag.value<ResourceId>());
+    VulkanTextureTag vtex = tag.value<VulkanTextureTag>();
+
+    TextureDescription *tex = m_Ctx.GetTexture(vtex.ID);
 
     if(tex)
     {
@@ -2734,7 +2773,7 @@ void VulkanPipelineStateViewer::resource_itemActivated(RDTreeWidgetItem *item, i
         if(!m_Ctx.HasTextureViewer())
           m_Ctx.ShowTextureViewer();
         ITextureViewer *viewer = m_Ctx.GetTextureViewer();
-        viewer->ViewTexture(tex->resourceId, true);
+        viewer->ViewTexture(tex->resourceId, vtex.compType, true);
       }
 
       return;

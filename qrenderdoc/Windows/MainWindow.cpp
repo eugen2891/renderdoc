@@ -488,6 +488,8 @@ MainWindow::~MainWindow()
   m_NetManagerThread->thread()->quit();
   m_NetManagerThread->deleteLater();
 
+  m_Ctx.Replay().DisconnectFromRemoteServer();
+
   // explicitly delete our children here, so that the MainWindow is still alive while they are
   // closing.
 
@@ -1071,6 +1073,8 @@ bool MainWindow::PromptCloseCapture()
       text += tr("Bookmarks have been changed.\n");
     if(mods & CaptureModifications::Notes)
       text += tr("Capture notes have been changed.\n");
+    if(mods & CaptureModifications::EditedShaders)
+      text += tr("Edited shaders have been changed.\n");
 
     bool saveas = false;
 

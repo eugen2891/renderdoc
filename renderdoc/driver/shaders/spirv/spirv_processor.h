@@ -35,6 +35,11 @@
 #include "common/common.h"
 #include "spirv_common.h"
 
+namespace half_float
+{
+class half;
+};
+
 namespace rdcspv
 {
 struct Scalar
@@ -118,6 +123,7 @@ SCALAR_TYPE(int32_t, Op::TypeInt, 32, true);
 SCALAR_TYPE(int64_t, Op::TypeInt, 64, true);
 SCALAR_TYPE(float, Op::TypeFloat, 32, false);
 SCALAR_TYPE(double, Op::TypeFloat, 64, false);
+SCALAR_TYPE(half_float::half, Op::TypeFloat, 16, false);
 
 struct Vector
 {

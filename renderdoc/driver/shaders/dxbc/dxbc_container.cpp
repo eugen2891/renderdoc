@@ -269,6 +269,7 @@ static const uint32_t FOURCC_ILDN = MAKE_FOURCC('I', 'L', 'D', 'N');
 static const uint32_t FOURCC_HASH = MAKE_FOURCC('H', 'A', 'S', 'H');
 static const uint32_t FOURCC_SFI0 = MAKE_FOURCC('S', 'F', 'I', '0');
 static const uint32_t FOURCC_PSV0 = MAKE_FOURCC('P', 'S', 'V', '0');
+static const uint32_t FOURCC_RST0 = MAKE_FOURCC('R', 'S', 'T', '0');
 
 ShaderBuiltin GetSystemValue(SVSemantic systemValue)
 {
@@ -556,6 +557,9 @@ const rdcstr &DXBCContainer::GetDisassembly()
       if(!m_DebugFileName.empty())
         m_Disassembly += StringFormat::Fmt("// Debug name: %s\n", m_DebugFileName.c_str());
 
+      if(m_ShaderExt.second != ~0U)
+        m_Disassembly += "// Vendor shader extensions in use\n";
+
       m_Disassembly += m_DXBCByteCode->GetDisassembly();
     }
     else if(m_DXILByteCode)
@@ -567,6 +571,9 @@ const rdcstr &DXBCContainer::GetDisassembly()
 
       if(!m_DebugFileName.empty())
         m_Disassembly += StringFormat::Fmt("; shader debug name: %s\n", m_DebugFileName.c_str());
+
+      if(m_ShaderExt.second != ~0U)
+        m_Disassembly += "; Vendor shader extensions in use\n";
 
       m_Disassembly += "; shader hash: ";
       byte *hashBytes = (byte *)m_Hash;
@@ -599,6 +606,8 @@ void DXBCContainer::FillTraceLineInfo(ShaderDebugTrace &trace) const
       // 2 minimum for the shader hash we always print
       uint32_t extraLines = 2;
       if(!m_DebugFileName.empty())
+        extraLines++;
+      if(m_ShaderExt.second != ~0U)
         extraLines++;
 
       if(m_GlobalFlags != GlobalShaderFlags::None)
@@ -675,6 +684,45 @@ void DXBCContainer::GetHash(uint32_t hash[4], const void *ByteCode, size_t Bytec
       memcpy(hash, hashHeader->hashValue, sizeof(hashHeader->hashValue));
     }
   }
+}
+
+bool DXBCContainer::UsesExtensionUAV(uint32_t slot, uint32_t space, const void *ByteCode,
+                                     size_t BytecodeLength)
+{
+  if(slot == ~0U && space == ~0U)
+    return false;
+
+  const FileHeader *header = (const FileHeader *)ByteCode;
+
+  const byte *data = (const byte *)ByteCode;    // just for convenience
+
+  if(header->fourcc != FOURCC_DXBC)
+    return false;
+
+  if(header->fileLength != (uint32_t)BytecodeLength)
+    return false;
+
+  const uint32_t *chunkOffsets = (const uint32_t *)(header + 1);    // right after the header
+
+  for(uint32_t chunkIdx = 0; chunkIdx < header->numChunks; chunkIdx++)
+  {
+    const uint32_t *fourcc = (const uint32_t *)(data + chunkOffsets[chunkIdx]);
+    const uint32_t *chunkSize = (const uint32_t *)(fourcc + 1);
+
+    const byte *chunkContents = (const byte *)(chunkSize + 1);
+
+    if(*fourcc == FOURCC_SHEX || *fourcc == FOURCC_SHDR)
+      return DXBCBytecode::Program::UsesExtensionUAV(slot, space, chunkContents, *chunkSize);
+
+    // far too expensive to figure out if a DXIL blob references the shader UAV. Just assume it does
+    // - this is only as an opportunistic thing to avoid requiring vendor extensions on programs
+    // that initialise but don't use them. If a user is bothering with DXIL they deserve what they
+    // get.
+    if(*fourcc == FOURCC_DXIL || *fourcc == FOURCC_ILDB)
+      return true;
+  }
+
+  return false;
 }
 
 bool DXBCContainer::CheckForDebugInfo(const void *ByteCode, size_t ByteCodeLength)
@@ -912,7 +960,8 @@ void DXBCContainer::TryFetchSeparateDebugInfo(bytebuf &byteCode, const rdcstr &d
   }
 }
 
-DXBCContainer::DXBCContainer(bytebuf &ByteCode, const rdcstr &debugInfoPath)
+DXBCContainer::DXBCContainer(bytebuf &ByteCode, const rdcstr &debugInfoPath, GraphicsAPI api,
+                             uint32_t shaderExtReg, uint32_t shaderExtSpace)
 {
   RDCEraseEl(m_ShaderStats);
 
@@ -1248,6 +1297,10 @@ DXBCContainer::DXBCContainer(bytebuf &ByteCode, const rdcstr &debugInfoPath)
     else if(*fourcc == FOURCC_SFI0)
     {
       m_GlobalFlags = *(const GlobalShaderFlags *)chunkContents;
+    }
+    else if(*fourcc == FOURCC_RST0)
+    {
+      // root signature
     }
     else if(*fourcc == FOURCC_PSV0)
     {
@@ -1731,13 +1784,17 @@ DXBCContainer::DXBCContainer(bytebuf &ByteCode, const rdcstr &debugInfoPath)
           {
             *c = 0;
 
+            rdcstr fname = filename;
+            if(fname.empty())
+              fname = "shader";
+
             // find the new destination file
             bool found = false;
             size_t dstFileIdx = 0;
 
             for(size_t f = 0; f < splitFiles.size(); f++)
             {
-              if(splitFiles[f].filename == filename)
+              if(splitFiles[f].filename == fname)
               {
                 found = true;
                 dstFileIdx = f;
@@ -1752,11 +1809,11 @@ DXBCContainer::DXBCContainer(bytebuf &ByteCode, const rdcstr &debugInfoPath)
             }
             else
             {
-              RDCWARN("Couldn't find filename '%s' in #line directive in debug info", filename);
+              RDCWARN("Couldn't find filename '%s' in #line directive in debug info", fname.c_str());
 
               // make a dummy file to write into that won't be used.
               splitFiles.push_back(SplitFile());
-              splitFiles.back().filename = filename;
+              splitFiles.back().filename = fname;
               splitFiles.back().modified = true;
 
               changedFile = true;
@@ -1798,6 +1855,26 @@ DXBCContainer::DXBCContainer(bytebuf &ByteCode, const rdcstr &debugInfoPath)
   if(m_DXBCByteCode || m_DXILByteCode)
   {
     RDCASSERT(m_Reflection);
+
+    if(shaderExtReg != ~0U)
+    {
+      bool found = false;
+      const bool sm51 = (m_Version.Major == 5 && m_Version.Minor == 1);
+
+      // see if we can find the magic UAV. If so remove it from the reflection
+      for(size_t i = 0; i < m_Reflection->UAVs.size(); i++)
+      {
+        const ShaderInputBind &uav = m_Reflection->UAVs[i];
+        if(uav.reg == shaderExtReg && (!sm51 || shaderExtSpace == ~0U || shaderExtSpace == uav.space))
+        {
+          found = true;
+          m_Reflection->UAVs.erase(i);
+          m_DXBCByteCode->SetShaderEXTUAV(api, shaderExtSpace, shaderExtReg);
+          m_ShaderExt = {shaderExtSpace, shaderExtReg};
+          break;
+        }
+      }
+    }
   }
 }
 
@@ -1974,7 +2051,7 @@ TEST_CASE("DO NOT COMMIT - convenience test", "[dxbc]")
   bytebuf buf;
   FileIO::ReadAll("/path/to/container_file.dxbc", buf);
 
-  DXBC::DXBCContainer container(buf, rdcstr());
+  DXBC::DXBCContainer container(buf, rdcstr(), GraphicsAPI::D3D11, ~0U, ~0U);
 
   // the only thing fetched lazily is the disassembly, so grab that here
 

@@ -28,11 +28,13 @@
 #include <QCloseEvent>
 #include <QCollator>
 #include <QDesktopServices>
+#include <QDialogButtonBox>
 #include <QElapsedTimer>
 #include <QFileSystemModel>
 #include <QFontDatabase>
 #include <QGridLayout>
 #include <QGuiApplication>
+#include <QHeaderView>
 #include <QJsonDocument>
 #include <QKeyEvent>
 #include <QLabel>
@@ -51,6 +53,7 @@
 #include <QTextDocument>
 #include <QtMath>
 #include "Code/Resources.h"
+#include "Widgets/Extended/RDListWidget.h"
 #include "Widgets/Extended/RDTreeWidget.h"
 
 // normally this is in the renderdoc core library, but it's needed for the 'unknown enum' path,
@@ -449,13 +452,17 @@ bool RichResourceTextCheck(const QVariant &var)
 static const int RichResourceTextMargin = 2;
 
 void RichResourceTextPaint(const QWidget *owner, QPainter *painter, QRect rect, QFont font,
-                           QPalette palette, bool mouseOver, QPoint mousePos, const QVariant &var)
+                           QPalette palette, QStyle::State state, QPoint mousePos,
+                           const QVariant &var)
 {
+  QBrush foreBrush = palette.brush(state & QStyle::State_Selected ? QPalette::HighlightedText
+                                                                  : QPalette::WindowText);
+
+  painter->save();
+
   // special case handling for ResourceId/GPUAddress on its own
   if(var.userType() == qMetaTypeId<ResourceId>() || var.userType() == qMetaTypeId<GPUAddressPtr>())
   {
-    painter->save();
-
     QFont f = painter->font();
     f.setBold(true);
     painter->setFont(f);
@@ -508,6 +515,7 @@ void RichResourceTextPaint(const QWidget *owner, QPainter *painter, QRect rect, 
       }
     }
 
+    painter->setPen(foreBrush.color());
     painter->drawText(rect, Qt::AlignLeft | Qt::AlignVCenter, name);
 
     QRect textRect =
@@ -527,11 +535,11 @@ void RichResourceTextPaint(const QWidget *owner, QPainter *painter, QRect rect, 
 
     painter->drawPixmap(pos, px, px.rect());
 
-    if(mouseOver && textRect.contains(mousePos) && valid)
+    if((state & QStyle::State_MouseOver) && textRect.contains(mousePos) && valid)
     {
       int underline_y = textRect.bottom() - margin;
 
-      painter->setPen(QPen(palette.brush(QPalette::WindowText), 1.0));
+      painter->setPen(QPen(foreBrush, 1.0));
       painter->drawLine(QPoint(textRect.left(), underline_y), QPoint(textRect.right(), underline_y));
     }
 
@@ -557,11 +565,19 @@ void RichResourceTextPaint(const QWidget *owner, QPainter *painter, QRect rect, 
   else
     painter->translate(1, 0);
 
-  linkedText->doc.drawContents(painter, QRectF(0, 0, rect.width() - 1, rect.height()));
+  QAbstractTextDocumentLayout::PaintContext docCtx;
+  docCtx.palette = palette;
+  docCtx.palette.setColor(QPalette::Text, foreBrush.color());
 
-  if(mouseOver)
+  docCtx.clip = QRectF(0, 0, rect.width() - 1, rect.height());
+
+  painter->setClipRect(docCtx.clip);
+
+  linkedText->doc.documentLayout()->draw(painter, docCtx);
+
+  if(state & QStyle::State_MouseOver)
   {
-    painter->setPen(QPen(palette.brush(QPalette::WindowText), 1.0));
+    painter->setPen(QPen(foreBrush, 1.0));
 
     QAbstractTextDocumentLayout *layout = linkedText->doc.documentLayout();
 
@@ -605,6 +621,8 @@ void RichResourceTextPaint(const QWidget *owner, QPainter *painter, QRect rect, 
       }
     }
   }
+
+  painter->restore();
 }
 
 int RichResourceTextWidthHint(const QWidget *owner, const QFont &font, const QVariant &var)
@@ -882,8 +900,7 @@ void RichTextViewDelegate::paint(QPainter *painter, const QStyleOptionViewItem &
         rect.setX(rect.x() + opt.icon.actualSize(opt.decorationSize, mode, state).width() + 4);
       }
 
-      RichResourceTextPaint(m_widget, painter, rect, opt.font, option.palette,
-                            option.state & QStyle::State_MouseOver,
+      RichResourceTextPaint(m_widget, painter, rect, opt.font, option.palette, option.state,
                             m_widget->viewport()->mapFromGlobal(QCursor::pos()), v);
 
       painter->restore();
@@ -1253,7 +1270,7 @@ void CombineUsageEvents(ICaptureContext &ctx, const rdcarray<EventUsage> &usage,
   uint32_t end = 0;
   ResourceUsage us = ResourceUsage::IndexBuffer;
 
-  for(const EventUsage u : usage)
+  for(const EventUsage &u : usage)
   {
     if(start == 0)
     {
@@ -1317,81 +1334,81 @@ void CombineUsageEvents(ICaptureContext &ctx, const rdcarray<EventUsage> &usage,
     callback(start, end, us);
 }
 
-void addStructuredObjects(RDTreeWidgetItem *parent, const StructuredObjectList &objs,
-                          bool parentIsArray)
+QVariant SDObject2Variant(const SDObject *obj)
 {
-  for(const SDObject *obj : objs)
+  QVariant param;
+
+  // we don't identify via the type name as many types could be serialised as a ResourceId -
+  // e.g. ID3D11Resource* or ID3D11Buffer* which would be the actual typename. We want to preserve
+  // that for the best raw structured data representation instead of flattening those out to just
+  // "ResourceId", and we also don't want to store two types ('fake' and 'real'), so instead we
+  // check the custom string.
+  if(obj->type.basetype == SDBasic::Resource)
+  {
+    param = QVariant::fromValue(obj->data.basic.id);
+  }
+  else if(obj->type.flags & SDTypeFlags::NullString)
+  {
+    param = lit("NULL");
+  }
+  else if(obj->type.flags & SDTypeFlags::HasCustomString)
+  {
+    param = obj->data.str;
+  }
+  else
+  {
+    switch(obj->type.basetype)
+    {
+      case SDBasic::Chunk: param = QVariant(); break;
+      case SDBasic::Struct: param = QFormatStr("%1()").arg(obj->type.name); break;
+      case SDBasic::Array: param = QFormatStr("%1[]").arg(obj->type.name); break;
+      case SDBasic::Null: param = lit("NULL"); break;
+      case SDBasic::Buffer: param = lit("(%1 bytes)").arg(obj->type.byteSize); break;
+      case SDBasic::String:
+      {
+        QStringList lines = QString(obj->data.str).split(QLatin1Char('\n'));
+        QString trimmedStr;
+        for(int i = 0; i < 3 && i < lines.count(); i++)
+          trimmedStr += lines[i] + QLatin1Char('\n');
+        if(lines.count() > 3)
+          trimmedStr += lit("...");
+        param = trimmedStr.trimmed();
+        break;
+      }
+      case SDBasic::Resource:
+      case SDBasic::Enum:
+      case SDBasic::UnsignedInteger: param = Formatter::HumanFormat(obj->data.basic.u); break;
+      case SDBasic::SignedInteger: param = Formatter::Format(obj->data.basic.i); break;
+      case SDBasic::Float: param = Formatter::Format(obj->data.basic.d); break;
+      case SDBasic::Boolean: param = (obj->data.basic.b ? lit("True") : lit("False")); break;
+      case SDBasic::Character: param = QString(QLatin1Char(obj->data.basic.c)); break;
+    }
+  }
+
+  return param;
+}
+
+void addStructuredChildren(RDTreeWidgetItem *parent, const SDObject &parentObj)
+{
+  for(const SDObject *obj : parentObj)
   {
     if(obj->type.flags & SDTypeFlags::Hidden)
       continue;
 
-    QVariant param;
+    QVariant name;
 
-    if(parentIsArray)
-      param = QFormatStr("[%1]").arg(parent->childCount());
+    if(parentObj.type.basetype == SDBasic::Array)
+      name = QFormatStr("[%1]").arg(parent->childCount());
     else
-      param = obj->name;
+      name = obj->name;
 
-    RDTreeWidgetItem *item = new RDTreeWidgetItem({param, QString()});
+    RDTreeWidgetItem *item = new RDTreeWidgetItem({name, QString()});
 
-    // we don't identify via the type name as many types could be serialised as a ResourceId -
-    // e.g. ID3D11Resource* or ID3D11Buffer* which would be the actual typename. We want to preserve
-    // that for the best raw structured data representation instead of flattening those out to just
-    // "ResourceId", and we also don't want to store two types ('fake' and 'real'), so instead we
-    // check the custom string.
-    if(obj->type.basetype == SDBasic::Resource)
-    {
-      ResourceId id;
-      static_assert(sizeof(id) == sizeof(obj->data.basic.u), "ResourceId is no longer uint64_t!");
-      memcpy(&id, &obj->data.basic.u, sizeof(id));
+    item->setText(1, SDObject2Variant(obj));
 
-      param = id;
-    }
-    else if(obj->type.flags & SDTypeFlags::NullString)
-    {
-      param = lit("NULL");
-    }
-    else if(obj->type.flags & SDTypeFlags::HasCustomString)
-    {
-      param = obj->data.str;
-    }
-    else
-    {
-      switch(obj->type.basetype)
-      {
-        case SDBasic::Chunk:
-        case SDBasic::Struct:
-          param = QFormatStr("%1()").arg(obj->type.name);
-          addStructuredObjects(item, obj->data.children, false);
-          break;
-        case SDBasic::Array:
-          param = QFormatStr("%1[]").arg(obj->type.name);
-          addStructuredObjects(item, obj->data.children, true);
-          break;
-        case SDBasic::Null: param = lit("NULL"); break;
-        case SDBasic::Buffer: param = lit("(%1 bytes)").arg(obj->type.byteSize); break;
-        case SDBasic::String:
-        {
-          QStringList lines = QString(obj->data.str).split(QLatin1Char('\n'));
-          QString trimmedStr;
-          for(int i = 0; i < 3 && i < lines.count(); i++)
-            trimmedStr += lines[i] + QLatin1Char('\n');
-          if(lines.count() > 3)
-            trimmedStr += lit("...");
-          param = trimmedStr.trimmed();
-          break;
-        }
-        case SDBasic::Resource:
-        case SDBasic::Enum:
-        case SDBasic::UnsignedInteger: param = Formatter::HumanFormat(obj->data.basic.u); break;
-        case SDBasic::SignedInteger: param = Formatter::Format(obj->data.basic.i); break;
-        case SDBasic::Float: param = Formatter::Format(obj->data.basic.d); break;
-        case SDBasic::Boolean: param = (obj->data.basic.b ? lit("True") : lit("False")); break;
-        case SDBasic::Character: param = QString(QLatin1Char(obj->data.basic.c)); break;
-      }
-    }
-
-    item->setText(1, param);
+    if(obj->type.basetype == SDBasic::Chunk || obj->type.basetype == SDBasic::Struct ||
+       obj->type.basetype == SDBasic::Array)
+      addStructuredChildren(item, *obj);
 
     parent->addChild(item);
   }
@@ -2669,3 +2686,361 @@ void LambdaThread::windowsSetName()
 }
 
 #endif
+
+void UpdateVisibleColumns(rdcstr windowTitle, int columnCount, QHeaderView *header,
+                          const QStringList &headers)
+{
+  QDialog dialog;
+  RDListWidget list;
+  QDialogButtonBox buttons;
+
+  dialog.setWindowTitle(windowTitle);
+  dialog.setWindowFlags(dialog.windowFlags() & ~Qt::WindowContextHelpButtonHint);
+
+  for(int visIdx = 0; visIdx < columnCount; visIdx++)
+  {
+    int logIdx = header->logicalIndex(visIdx);
+
+    QListWidgetItem *item = new QListWidgetItem(headers[logIdx], &list);
+
+    item->setData(Qt::UserRole, logIdx);
+
+    item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+
+    // The first column must stay enabled
+    if(logIdx == 0)
+      item->setFlags(item->flags() & ~Qt::ItemIsEnabled);
+
+    item->setCheckState(header->isSectionHidden(logIdx) ? Qt::Unchecked : Qt::Checked);
+  }
+
+  list.setSelectionMode(QAbstractItemView::SingleSelection);
+  list.setDragDropMode(QAbstractItemView::DragDrop);
+  list.setDefaultDropAction(Qt::MoveAction);
+
+  buttons.setOrientation(Qt::Horizontal);
+  buttons.setStandardButtons(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+  buttons.setCenterButtons(true);
+
+  QObject::connect(&buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+  QObject::connect(&buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+  QVBoxLayout *layout = new QVBoxLayout(&dialog);
+  layout->addWidget(new QLabel(QString::fromUtf8("Select the columns to enable."), &dialog));
+  layout->addWidget(&list);
+  layout->addWidget(&buttons);
+
+  if(!RDDialog::show(&dialog))
+    return;
+
+  for(int i = 0; i < columnCount; i++)
+  {
+    int logicalIdx = list.item(i)->data(Qt::UserRole).toInt();
+
+    if(list.item(i)->checkState() == Qt::Unchecked)
+      header->hideSection(logicalIdx);
+    else
+      header->showSection(logicalIdx);
+
+    header->moveSection(header->visualIndex(logicalIdx), i);
+  }
+}
+
+const rdcarray<SDObject *> &StructuredDataItemModel::objects() const
+{
+  return m_Objects;
+}
+
+void StructuredDataItemModel::setObjects(const rdcarray<SDObject *> &objs)
+{
+  emit beginResetModel();
+  m_Objects = objs;
+  emit endResetModel();
+}
+
+// on 64-bit we've got plenty of bits so we can pack the indices into top/bottom 32-bits.
+// on 32-bit we assume there won't be any huge arrays or we'll run out of memory elsewhere probably,
+// so we pack 9/21 bits allowing for up to 512 arrays of ~2 million entries each.
+// bear in mind 2 bits are reserved for the index tag itself
+struct IndexMasks
+{
+  static constexpr quintptr IndexBits() { return sizeof(void *) == 8 ? 32U : 21U; }
+  static quintptr GetArrayID(quintptr packed) { return packed >> IndexBits(); }
+  static quintptr GetIndexInArray(quintptr packed)
+  {
+    return packed & ((quintptr(1U) << IndexBits()) - 1);
+  }
+  static quintptr Pack(quintptr arrayId, quintptr idxInArray)
+  {
+    return (arrayId << IndexBits()) | idxInArray;
+  }
+};
+
+StructuredDataItemModel::Index StructuredDataItemModel::decodeIndex(QModelIndex idx) const
+{
+  // if it's a direct pointer, the low bits will be 0 for alignment.
+  Index ret;
+  ret.tag = IndexTag(idx.internalId() & 0x3);
+
+  if(ret.tag == Direct)
+  {
+    ret.obj = (SDObject *)idx.internalPointer();
+  }
+  else
+  {
+    quintptr packed = idx.internalId() >> 2;
+    ret.obj = (SDObject *)m_Arrays[IndexMasks::GetArrayID(packed)];
+    ret.indexInArray = IndexMasks::GetIndexInArray(packed);
+  }
+
+  return ret;
+}
+
+quintptr StructuredDataItemModel::encodeIndex(Index idx) const
+{
+  if(idx.tag == Direct)
+    return (quintptr)idx.obj;
+
+  int arrayId = m_Arrays.indexOf(idx.obj);
+  if(arrayId == -1)
+  {
+    m_Arrays.push_back(idx.obj);
+    arrayId = m_Arrays.count() - 1;
+  }
+
+  quintptr packed = IndexMasks::Pack(arrayId, idx.indexInArray);
+  return (packed << 2U) | quintptr(idx.tag);
+}
+
+// for large arrays (more than this size) paginate it with pages of this size.
+// This is primarily beneficial for lazy arrays to avoid needing to lazily evaluate a huge array.
+const int ArrayPageSize = 250;
+
+bool StructuredDataItemModel::isLargeArray(SDObject *obj) const
+{
+  return (int)obj->NumChildren() > ArrayPageSize;
+}
+
+QModelIndex StructuredDataItemModel::index(int row, int column, const QModelIndex &parent) const
+{
+  if(row < 0 || column < 0 || row >= rowCount(parent) || column >= columnCount(parent))
+    return QModelIndex();
+
+  SDObject *par = NULL;
+
+  if(parent.isValid())
+  {
+    Index decodedParent = decodeIndex(parent);
+
+    // the children of page nodes are real nodes. We cache the array member's index here too for
+    // parent() lookups
+    if(decodedParent.tag == PageNode)
+    {
+      int idx = decodedParent.indexInArray + row;
+
+      m_ArrayMembers[decodedParent.obj->GetChild(idx)] = idx;
+
+      return createIndex(row, column, encodeIndex({ArrayMember, decodedParent.obj, idx}));
+    }
+    else if(decodedParent.tag == ArrayMember)
+    {
+      par = decodedParent.obj->GetChild(decodedParent.indexInArray);
+    }
+    else
+    {
+      par = decodedParent.obj;
+    }
+
+    // if this parent node is a large array, the children are page nodes, otherwise the child is a
+    // direct node
+    if(isLargeArray(par))
+    {
+      return createIndex(row, column, encodeIndex({PageNode, par, row * ArrayPageSize}));
+    }
+    else
+    {
+      return createIndex(row, column, encodeIndex({Direct, par->GetChild(row), 0}));
+    }
+  }
+  else
+  {
+    return createIndex(row, column, encodeIndex({Direct, m_Objects[row], 0}));
+  }
+}
+
+QModelIndex StructuredDataItemModel::parent(const QModelIndex &index) const
+{
+  if(index.internalPointer() == NULL)
+    return QModelIndex();
+
+  Index decodedIndex = decodeIndex(index);
+
+  SDObject *obj = NULL;
+
+  // array members have parents that are page nodes
+  if(decodedIndex.tag == ArrayMember)
+  {
+    int pageRow = decodedIndex.indexInArray / ArrayPageSize;
+    return createIndex(decodedIndex.indexInArray / ArrayPageSize, 0,
+                       encodeIndex({PageNode, decodedIndex.obj, pageRow * ArrayPageSize}));
+  }
+  else if(decodedIndex.tag == PageNode)
+  {
+    obj = decodedIndex.obj;
+  }
+  else
+  {
+    obj = decodedIndex.obj->GetParent();
+  }
+
+  // need to figure out the index for obj, it could be an array member itself in theory, or it might
+  // be direct, or it could be a root object
+  if(obj)
+  {
+    SDObject *parent = obj->GetParent();
+
+    if(parent == NULL)
+    {
+      int row = m_Objects.indexOf(obj);
+      if(row >= 0)
+        return createIndex(row, 0, obj);
+
+      qCritical() << "Encountered object with no parent that is not a root";
+
+      return QModelIndex();
+    }
+
+    // if the parent is a large array
+    if(isLargeArray(parent))
+    {
+      // we expect to have set up our member index before this lookup was ever needed
+      auto it = m_ArrayMembers.find(obj);
+      if(it == m_ArrayMembers.end())
+      {
+        qCritical() << "Expected member index to be set up, but it is not";
+
+        return QModelIndex();
+      }
+
+      // return the index for this item, with the child index we looked up
+      return createIndex(it.value(), 0, encodeIndex({ArrayMember, parent, it.value()}));
+    }
+
+    // search our parent to find out our child index
+    for(size_t i = 0; i < parent->NumChildren(); i++)
+      if(parent->GetChild(i) == obj)
+        return createIndex((int)i, 0, obj);
+
+    return QModelIndex();
+  }
+
+  return QModelIndex();
+}
+
+int StructuredDataItemModel::rowCount(const QModelIndex &parent) const
+{
+  if(!parent.isValid())
+    return m_Objects.count();
+
+  Index decodedIdx = decodeIndex(parent);
+
+  SDObject *obj = NULL;
+
+  // if this is a page node, it either has PageSize children if it's not the last one, or the
+  // remainder
+  if(decodedIdx.tag == PageNode)
+  {
+    size_t pageBase = decodedIdx.indexInArray;
+
+    return qMin(ArrayPageSize, int(decodedIdx.obj->NumChildren() - pageBase));
+  }
+  else if(decodedIdx.tag == ArrayMember)
+  {
+    obj = decodedIdx.obj->GetChild(decodedIdx.indexInArray);
+  }
+  else
+  {
+    obj = decodedIdx.obj;
+  }
+
+  if(obj)
+  {
+    if(isLargeArray(obj))
+      return (int(obj->NumChildren()) + ArrayPageSize - 1) / ArrayPageSize;
+    else
+      return (int)obj->NumChildren();
+  }
+
+  return 0;
+}
+
+int StructuredDataItemModel::columnCount(const QModelIndex &parent) const
+{
+  return m_ColumnNames.count();
+}
+
+QVariant StructuredDataItemModel::headerData(int section, Qt::Orientation orientation, int role) const
+{
+  if(orientation == Qt::Horizontal && role == Qt::DisplayRole)
+  {
+    if(section < m_ColumnNames.count())
+      return m_ColumnNames[section];
+  }
+
+  return QVariant();
+}
+
+Qt::ItemFlags StructuredDataItemModel::flags(const QModelIndex &index) const
+{
+  if(!index.isValid())
+    return 0;
+
+  return QAbstractItemModel::flags(index);
+}
+
+QVariant StructuredDataItemModel::data(const QModelIndex &index, int role) const
+{
+  if(role != Qt::DisplayRole || index.column() >= columnCount())
+    return QVariant();
+
+  Index decodedIdx = decodeIndex(index);
+  SDObject *obj = NULL;
+
+  if(decodedIdx.tag == PageNode)
+  {
+    if(m_ColumnValues[index.column()] == Name)
+    {
+      size_t pageBase = decodedIdx.indexInArray;
+      size_t pageCount = qMin(ArrayPageSize, int(decodedIdx.obj->NumChildren() - pageBase));
+
+      return QFormatStr("[%1..%2]").arg(pageBase).arg(pageBase + pageCount - 1);
+    }
+    return QVariant();
+  }
+  else if(decodedIdx.tag == ArrayMember)
+  {
+    obj = decodedIdx.obj->GetChild(decodedIdx.indexInArray);
+  }
+  else
+  {
+    obj = decodedIdx.obj;
+  }
+
+  if(obj)
+  {
+    switch(m_ColumnValues[index.column()])
+    {
+      case Name:
+        if(decodedIdx.tag == ArrayMember)
+          return QFormatStr("[%1]").arg(decodedIdx.indexInArray);
+        else if(obj->GetParent() && obj->GetParent()->type.basetype == SDBasic::Array)
+          return QFormatStr("[%1]").arg(index.row());
+        else
+          return obj->name;
+      case Value: return SDObject2Variant(obj);
+      case Type: return obj->type.name;
+    }
+  }
+
+  return QVariant();
+}

@@ -142,7 +142,8 @@ ShaderCompileFlags EncodeFlags(const uint32_t flags, const rdcstr &profile);
 class DXBCContainer
 {
 public:
-  DXBCContainer(bytebuf &ByteCode, const rdcstr &debugInfoPath);
+  DXBCContainer(bytebuf &ByteCode, const rdcstr &debugInfoPath, GraphicsAPI api,
+                uint32_t shaderExtReg, uint32_t shaderExtSpace);
   ~DXBCContainer();
   DXBC::ShaderType m_Type = DXBC::ShaderType::Max;
   struct
@@ -165,6 +166,9 @@ public:
   const DXIL::Program *GetDXILByteCode() { return m_DXILByteCode; }
   static void GetHash(uint32_t hash[4], const void *ByteCode, size_t BytecodeLength);
 
+  static bool UsesExtensionUAV(uint32_t slot, uint32_t space, const void *ByteCode,
+                               size_t BytecodeLength);
+
   static bool CheckForDebugInfo(const void *ByteCode, size_t ByteCodeLength);
   static bool CheckForDXIL(const void *ByteCode, size_t ByteCodeLength);
   static rdcstr GetDebugBinaryPath(const void *ByteCode, size_t ByteCodeLength);
@@ -185,6 +189,8 @@ private:
   std::map<uint32_t, CBufferVariableType> m_Variables;
 
   uint32_t m_Hash[4];
+
+  rdcpair<uint32_t, uint32_t> m_ShaderExt = {~0U, ~0U};
 
   rdcstr m_DebugFileName;
   GlobalShaderFlags m_GlobalFlags = GlobalShaderFlags::None;

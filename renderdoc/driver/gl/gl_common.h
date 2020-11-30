@@ -601,7 +601,7 @@ Topology MakePrimitiveTopology(GLenum Topo);
 GLenum MakeGLPrimitiveTopology(Topology Topo);
 BufferCategory MakeBufferCategory(GLenum bufferTarget);
 AddressMode MakeAddressMode(GLenum addr);
-TextureFilter MakeFilter(GLenum minf, GLenum magf, bool shadowSampler, float maxAniso);
+TextureFilter MakeFilter(GLenum minf, GLenum magf, float maxAniso);
 ShaderStage MakeShaderStage(GLenum type);
 CompareFunction MakeCompareFunc(GLenum func);
 StencilOperation MakeStencilOp(GLenum op);
@@ -700,6 +700,9 @@ DECLARE_REFLECTION_ENUM(AttribType);
 
 enum GLframebufferbitfield
 {
+  COLOR_BUFFER_BIT = 0x4000,
+  DEPTH_BUFFER_BIT = 0x100,
+  STENCIL_BUFFER_BIT = 0x400,
 };
 
 DECLARE_REFLECTION_ENUM(GLframebufferbitfield);

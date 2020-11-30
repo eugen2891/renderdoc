@@ -52,6 +52,8 @@ class StatisticsViewer;
 class TimelineBar;
 class PythonShell;
 class ResourceInspector;
+class ShaderViewer;
+class MiniQtHelper;
 
 class CaptureContext : public ICaptureContext, IExtensionManager
 {
@@ -85,6 +87,8 @@ public:
   void MenuDisplaying(PanelMenu panelMenu, QMenu *menu, QWidget *extensionButton,
                       const ExtensionCallbackData &data) override;
 
+  IMiniQtHelper &GetMiniQtHelper() override;
+
   void MessageDialog(const rdcstr &text, const rdcstr &title = "Python Extension Message") override;
   void ErrorDialog(const rdcstr &text, const rdcstr &title = "Python Extension Error") override;
   DialogButton QuestionDialog(const rdcstr &text, const rdcarray<DialogButton> &options,
@@ -114,6 +118,7 @@ public:
                   uint32_t eventId, bool force = false) override;
   void SetRemoteHost(int hostIndex);
   void RefreshStatus() override { SetEventID({}, m_SelectedEventID, m_EventID, true); }
+  bool IsResourceReplaced(ResourceId id) override;
   void RegisterReplacement(ResourceId id) override;
   void UnregisterReplacement(ResourceId id) override;
   void RefreshUIStatus(const rdcarray<ICaptureViewer *> &exclude, bool updateSelectedEvent,
@@ -241,6 +246,11 @@ public:
                             ShaderCompileFlags flags, IShaderViewer::SaveCallback saveCallback,
                             IShaderViewer::CloseCallback closeCallback) override;
 
+  void ApplyShaderEdit(IShaderViewer *viewer, ResourceId id, ShaderStage stage,
+                       ShaderEncoding shaderEncoding, ShaderCompileFlags flags,
+                       const rdcstr &entryFunc, const bytebuf &shaderBytes);
+  void RevertShaderEdit(IShaderViewer *viewer, ResourceId id);
+
   IShaderViewer *DebugShader(const ShaderBindpointMapping *bind, const ShaderReflection *shader,
                              ResourceId pipeline, ShaderDebugTrace *trace,
                              const rdcstr &debugContext) override;
@@ -292,6 +302,8 @@ private:
   rdcarray<DebugMessage> m_DebugMessages;
   int m_UnreadMessageCount = 0;
 
+  void SetModification(CaptureModifications mod);
+
   void SaveChanges();
 
   bool SaveRenames();
@@ -302,6 +314,9 @@ private:
 
   bool SaveNotes();
   void LoadNotes(const QString &data);
+
+  bool SaveEdits();
+  void LoadEdits(const QString &data);
 
   void CacheResources();
   rdcstr GetResourceNameUnsuffixed(const ResourceDescription *desc);
@@ -385,6 +400,10 @@ private:
   QMap<rdcstr, QList<QObject *>> m_ExtensionObjects;
 
   QList<QPointer<RegisteredMenuItem>> m_RegisteredMenuItems;
+
+  QList<ShaderViewer *> m_ShaderEditors;
+
+  MiniQtHelper *m_QtHelper = NULL;
 
   // Windows
   MainWindow *m_MainWindow = NULL;

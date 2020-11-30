@@ -389,6 +389,8 @@ rdcpair<uint32_t, uint32_t> ReplayOutput::PickVertex(uint32_t x, uint32_t y)
 {
   CHECK_REPLAY_THREAD();
 
+  RENDERDOC_PROFILEFUNCTION();
+
   DrawcallDescription *draw = m_pRenderer->GetDrawcallByEID(m_EventID);
 
   const rdcpair<uint32_t, uint32_t> errorReturn = {~0U, ~0U};
@@ -488,14 +490,12 @@ void ReplayOutput::ClearBackground(uint64_t outputID, const FloatVector &backgro
 {
   CHECK_REPLAY_THREAD();
 
-  if(m_RenderData.texDisplay.backgroundColor.x == 0.0f &&
-     m_RenderData.texDisplay.backgroundColor.y == 0.0f &&
-     m_RenderData.texDisplay.backgroundColor.z == 0.0f &&
-     m_RenderData.texDisplay.backgroundColor.w == 0.0f)
+  if(backgroundColor.x == 0.0f && backgroundColor.y == 0.0f && backgroundColor.z == 0.0f &&
+     backgroundColor.w == 0.0f)
     m_pDevice->RenderCheckerboard(RenderDoc::Inst().DarkCheckerboardColor(),
                                   RenderDoc::Inst().LightCheckerboardColor());
   else
-    m_pDevice->ClearOutputWindowColor(outputID, m_RenderData.texDisplay.backgroundColor);
+    m_pDevice->ClearOutputWindowColor(outputID, ConvertSRGBToLinear(backgroundColor));
 }
 
 void ReplayOutput::DisplayContext()
@@ -565,6 +565,8 @@ void ReplayOutput::DisplayContext()
 void ReplayOutput::Display()
 {
   CHECK_REPLAY_THREAD();
+
+  RENDERDOC_PROFILEFUNCTION();
 
   if(m_pDevice->CheckResizeOutputWindow(m_MainOutput.outputID))
   {
@@ -680,6 +682,8 @@ void ReplayOutput::DisplayTex()
 {
   CHECK_REPLAY_THREAD();
 
+  RENDERDOC_PROFILEFUNCTION();
+
   DrawcallDescription *draw = m_pRenderer->GetDrawcallByEID(m_EventID);
 
   if(m_MainOutput.outputID == 0)
@@ -766,6 +770,8 @@ void ReplayOutput::DisplayTex()
 void ReplayOutput::DisplayMesh()
 {
   CHECK_REPLAY_THREAD();
+
+  RENDERDOC_PROFILEFUNCTION();
 
   DrawcallDescription *draw = m_pRenderer->GetDrawcallByEID(m_EventID);
 

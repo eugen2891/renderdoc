@@ -81,6 +81,8 @@ void DoSerialiseViaResourceId(SerialiserType &ser, Interface *&el)
 
   if(ser.IsWriting())
     id = GetResID(el);
+  if(ser.IsStructurising() && rm)
+    id = rm->GetOriginalID(GetResID(el));
 
   DoSerialise(ser, id);
 
@@ -161,7 +163,7 @@ void DoSerialise(SerialiserType &ser, D3D12RootSignatureParameter &el)
 {
   RDCASSERTMSG(
       "root signature parameter serialisation is only supported for structured serialisers",
-      ser.IsDummy());
+      ser.IsStructurising());
 
   SERIALISE_MEMBER(ParameterType);
   switch(el.ParameterType)
@@ -211,8 +213,10 @@ void DoSerialise(SerialiserType &ser, D3D12_CPU_DESCRIPTOR_HANDLE &el)
 
   PortableHandle ph;
 
-  if(ser.IsWriting())
+  if(ser.IsWriting() || ser.IsStructurising())
     ph = ToPortableHandle(el);
+  if(ser.IsStructurising() && rm)
+    ph.heap = rm->GetOriginalID(ph.heap);
 
   DoSerialise(ser, ph);
 
@@ -232,8 +236,10 @@ void DoSerialise(SerialiserType &ser, D3D12_GPU_DESCRIPTOR_HANDLE &el)
 
   PortableHandle ph;
 
-  if(ser.IsWriting())
+  if(ser.IsWriting() || ser.IsStructurising())
     ph = ToPortableHandle(el);
+  if(ser.IsStructurising() && rm)
+    ph.heap = rm->GetOriginalID(ph.heap);
 
   DoSerialise(ser, ph);
 
@@ -255,10 +261,15 @@ void DoSerialise(SerialiserType &ser, DynamicDescriptorCopy &el)
 
   PortableHandle dst, src;
 
-  if(ser.IsWriting())
+  if(ser.IsWriting() || ser.IsStructurising())
   {
     dst = ToPortableHandle(el.dst);
     src = ToPortableHandle(el.src);
+  }
+  if(ser.IsStructurising() && rm)
+  {
+    dst.heap = rm->GetOriginalID(dst.heap);
+    src.heap = rm->GetOriginalID(src.heap);
   }
 
   ser.Serialise("dst"_lit, dst);
@@ -287,8 +298,10 @@ void DoSerialise(SerialiserType &ser, D3D12BufferLocation &el)
   ResourceId buffer;
   UINT64 offs = 0;
 
-  if(ser.IsWriting())
-    WrappedID3D12Resource1::GetResIDFromAddr(el.Location, buffer, offs);
+  if(ser.IsWriting() || ser.IsStructurising())
+    WrappedID3D12Resource::GetResIDFromAddr(el.Location, buffer, offs);
+  if(ser.IsStructurising() && rm)
+    buffer = rm->GetOriginalID(buffer);
 
   ser.Serialise("Buffer"_lit, buffer);
   ser.Serialise("Offset"_lit, offs);
@@ -341,17 +354,21 @@ void DoSerialise(SerialiserType &ser, D3D12Descriptor &el)
     }
     case D3D12DescriptorType::SRV:
     {
-      ser.Serialise("Resource"_lit, el.data.nonsamp.resource).TypedAs("ID3D12Resource *"_lit);
+      ResourceId Resource = el.data.nonsamp.resource;
+
+      if(ser.IsStructurising())
+        Resource = rm->GetOriginalID(Resource);
+
+      ser.Serialise("Resource"_lit, Resource).TypedAs("ID3D12Resource *"_lit);
 
       // convert to Live ID on replay
       if(ser.IsReading())
-        el.data.nonsamp.resource = rm->HasLiveResource(el.data.nonsamp.resource)
-                                       ? rm->GetLiveID(el.data.nonsamp.resource)
-                                       : ResourceId();
+        el.data.nonsamp.resource =
+            rm->HasLiveResource(Resource) ? rm->GetLiveID(Resource) : ResourceId();
 
       // special case because of squeezed descriptor
       D3D12_SHADER_RESOURCE_VIEW_DESC desc;
-      if(ser.IsWriting())
+      if(ser.IsWriting() || ser.IsStructurising())
         desc = el.data.nonsamp.srv.AsDesc();
       ser.Serialise("Descriptor"_lit, desc);
       if(ser.IsReading())
@@ -360,50 +377,64 @@ void DoSerialise(SerialiserType &ser, D3D12Descriptor &el)
     }
     case D3D12DescriptorType::RTV:
     {
-      ser.Serialise("Resource"_lit, el.data.nonsamp.resource).TypedAs("ID3D12Resource *"_lit);
+      ResourceId Resource = el.data.nonsamp.resource;
+
+      if(ser.IsStructurising())
+        Resource = rm->GetOriginalID(Resource);
+
+      ser.Serialise("Resource"_lit, Resource).TypedAs("ID3D12Resource *"_lit);
 
       // convert to Live ID on replay
       if(ser.IsReading())
-        el.data.nonsamp.resource = rm->HasLiveResource(el.data.nonsamp.resource)
-                                       ? rm->GetLiveID(el.data.nonsamp.resource)
-                                       : ResourceId();
+        el.data.nonsamp.resource =
+            rm->HasLiveResource(Resource) ? rm->GetLiveID(Resource) : ResourceId();
 
       ser.Serialise("Descriptor"_lit, el.data.nonsamp.rtv);
       break;
     }
     case D3D12DescriptorType::DSV:
     {
-      ser.Serialise("Resource"_lit, el.data.nonsamp.resource).TypedAs("ID3D12Resource *"_lit);
+      ResourceId Resource = el.data.nonsamp.resource;
+
+      if(ser.IsStructurising())
+        Resource = rm->GetOriginalID(Resource);
+
+      ser.Serialise("Resource"_lit, Resource).TypedAs("ID3D12Resource *"_lit);
 
       // convert to Live ID on replay
       if(ser.IsReading())
-        el.data.nonsamp.resource = rm->HasLiveResource(el.data.nonsamp.resource)
-                                       ? rm->GetLiveID(el.data.nonsamp.resource)
-                                       : ResourceId();
+        el.data.nonsamp.resource =
+            rm->HasLiveResource(Resource) ? rm->GetLiveID(Resource) : ResourceId();
 
       ser.Serialise("Descriptor"_lit, el.data.nonsamp.dsv);
       break;
     }
     case D3D12DescriptorType::UAV:
     {
-      ser.Serialise("Resource"_lit, el.data.nonsamp.resource).TypedAs("ID3D12Resource *"_lit);
-      ser.Serialise("CounterResource"_lit, el.data.nonsamp.counterResource)
-          .TypedAs("ID3D12Resource *"_lit);
+      ResourceId Resource = el.data.nonsamp.resource;
+      ResourceId CounterResource = el.data.nonsamp.counterResource;
+
+      if(ser.IsStructurising())
+      {
+        Resource = rm->GetOriginalID(Resource);
+        CounterResource = rm->GetOriginalID(CounterResource);
+      }
+
+      ser.Serialise("Resource"_lit, Resource).TypedAs("ID3D12Resource *"_lit);
+      ser.Serialise("CounterResource"_lit, CounterResource).TypedAs("ID3D12Resource *"_lit);
 
       // convert to Live ID on replay
       if(ser.IsReading())
       {
-        el.data.nonsamp.resource = rm->HasLiveResource(el.data.nonsamp.resource)
-                                       ? rm->GetLiveID(el.data.nonsamp.resource)
-                                       : ResourceId();
-        el.data.nonsamp.counterResource = rm->HasLiveResource(el.data.nonsamp.counterResource)
-                                              ? rm->GetLiveID(el.data.nonsamp.counterResource)
-                                              : ResourceId();
+        el.data.nonsamp.resource =
+            rm->HasLiveResource(Resource) ? rm->GetLiveID(Resource) : ResourceId();
+        el.data.nonsamp.counterResource =
+            rm->HasLiveResource(CounterResource) ? rm->GetLiveID(CounterResource) : ResourceId();
       }
 
       // special case because of squeezed descriptor
       D3D12_UNORDERED_ACCESS_VIEW_DESC desc;
-      if(ser.IsWriting())
+      if(ser.IsWriting() || ser.IsStructurising())
         desc = el.data.nonsamp.uav.AsDesc();
       ser.Serialise("Descriptor"_lit, desc);
       if(ser.IsReading())
@@ -473,6 +504,30 @@ void DoSerialise(SerialiserType &ser, D3D12_RESOURCE_DESC &el)
   SERIALISE_MEMBER(SampleDesc);
   SERIALISE_MEMBER(Layout);
   SERIALISE_MEMBER(Flags);
+}
+
+template <class SerialiserType>
+void DoSerialise(SerialiserType &ser, D3D12_MIP_REGION &el)
+{
+  SERIALISE_MEMBER(Width);
+  SERIALISE_MEMBER(Height);
+  SERIALISE_MEMBER(Depth);
+}
+
+template <class SerialiserType>
+void DoSerialise(SerialiserType &ser, D3D12_RESOURCE_DESC1 &el)
+{
+  SERIALISE_MEMBER(Dimension);
+  SERIALISE_MEMBER(Alignment);
+  SERIALISE_MEMBER(Width);
+  SERIALISE_MEMBER(Height);
+  SERIALISE_MEMBER(DepthOrArraySize);
+  SERIALISE_MEMBER(MipLevels);
+  SERIALISE_MEMBER(Format);
+  SERIALISE_MEMBER(SampleDesc);
+  SERIALISE_MEMBER(Layout);
+  SERIALISE_MEMBER(Flags);
+  SERIALISE_MEMBER(SamplerFeedbackMipRegion);
 }
 
 template <class SerialiserType>
@@ -1492,6 +1547,7 @@ INSTANTIATE_SERIALISE_TYPE(D3D12Descriptor);
 INSTANTIATE_SERIALISE_TYPE(D3D12_EXPANDED_PIPELINE_STATE_STREAM_DESC);
 
 INSTANTIATE_SERIALISE_TYPE(D3D12_RESOURCE_DESC);
+INSTANTIATE_SERIALISE_TYPE(D3D12_RESOURCE_DESC1);
 INSTANTIATE_SERIALISE_TYPE(D3D12_COMMAND_QUEUE_DESC);
 INSTANTIATE_SERIALISE_TYPE(D3D12_SHADER_BYTECODE);
 INSTANTIATE_SERIALISE_TYPE(D3D12_GRAPHICS_PIPELINE_STATE_DESC);

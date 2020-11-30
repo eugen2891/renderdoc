@@ -450,6 +450,11 @@ void GLPipelineStateViewer::OnEventChanged(uint32_t eventId)
   setState();
 }
 
+void GLPipelineStateViewer::SelectPipelineStage(PipelineStage stage)
+{
+  ui->pipeFlow->setSelectedStage((int)stage);
+}
+
 void GLPipelineStateViewer::on_showUnused_toggled(bool checked)
 {
   setState();
@@ -2204,7 +2209,7 @@ void GLPipelineStateViewer::resource_itemActivated(RDTreeWidgetItem *item, int c
         if(!m_Ctx.HasTextureViewer())
           m_Ctx.ShowTextureViewer();
         ITextureViewer *viewer = m_Ctx.GetTextureViewer();
-        viewer->ViewTexture(tex->resourceId, true);
+        viewer->ViewTexture(tex->resourceId, CompType::Typeless, true);
       }
 
       return;

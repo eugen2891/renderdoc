@@ -36,19 +36,12 @@ namespace Ui
 class TextureViewer;
 }
 
+class RDTreeWidgetItem;
 class ResourcePreview;
 class ThumbnailStrip;
 class TextureGoto;
 class QFileSystemWatcher;
 class TextureViewer;
-
-enum struct FollowType
-{
-  OutputColour,
-  OutputDepth,
-  ReadWrite,
-  ReadOnly
-};
 
 struct Following
 {
@@ -128,14 +121,41 @@ private:
 
   Q_PROPERTY(QVariant persistData READ persistData WRITE setPersistData DESIGNABLE false SCRIPTABLE false)
 
+  // Texture List
+  enum class FilterType
+  {
+    None,
+    Textures,
+    RenderTargets,
+    String
+  };
+
 public:
   explicit TextureViewer(ICaptureContext &ctx, QWidget *parent = 0);
   ~TextureViewer();
 
   // ITextureViewer
   QWidget *Widget() override { return this; }
-  void ViewTexture(ResourceId ID, bool focus) override;
+  void ViewTexture(ResourceId ID, CompType typeCast, bool focus) override;
+  void ViewFollowedResource(FollowType followType, ShaderStage stage, int32_t index,
+                            int32_t arrayElement) override;
+  ResourceId GetCurrentResource() override;
+
+  Subresource GetSelectedSubresource() override;
+  void SetSelectedSubresource(Subresource sub) override;
   void GotoLocation(int x, int y) override;
+  DebugOverlay GetTextureOverlay() override;
+  void SetTextureOverlay(DebugOverlay overlay) override;
+
+  bool IsZoomAutoFit() override;
+  float GetZoomLevel() override;
+  void SetZoomLevel(bool autofit, float zoom) override;
+
+  rdcpair<float, float> GetHistogramRange() override;
+  void SetHistogramRange(float blackpoint, float whitepoint) override;
+
+  uint32_t GetChannelVisibilityBits() override;
+  void SetChannelVisibility(bool red, bool green, bool blue, bool alpha) override;
 
   // ICaptureViewer
   void OnCaptureLoaded() override;
@@ -182,7 +202,8 @@ private slots:
   void on_cancelTextureListFilter_clicked();
   void on_textureListFilter_editTextChanged(const QString &text);
   void on_textureListFilter_currentIndexChanged(int index);
-  void on_textureList_clicked(const QModelIndex &index);
+  void on_colSelect_clicked();
+  void texture_itemActivated(RDTreeWidgetItem *item, int column);
 
   // manual slots
   void render_mouseClick(QMouseEvent *e);
@@ -216,7 +237,6 @@ private slots:
 protected:
   void enterEvent(QEvent *event) override;
   void showEvent(QShowEvent *event) override;
-  void changeEvent(QEvent *event) override;
 
 private:
   void RT_FetchCurrentPixel(IReplayController *r, uint32_t x, uint32_t y, PixelValue &pickValue,
@@ -225,8 +245,6 @@ private:
   void RT_PickHoverAndUpdate(IReplayController *);
   void RT_UpdateAndDisplay(IReplayController *);
   void RT_UpdateVisualRange(IReplayController *);
-
-  void UI_RecreatePanels();
 
   void UI_UpdateStatusText();
   void UI_UpdateTextureDetails();
@@ -238,11 +256,15 @@ private:
 
   void HighlightUsage();
 
+  void SelectPreview(ResourcePreview *prev);
+
   void SetupTextureTabs();
+  void RemoveTextureTabs(int firstIndex);
 
   void Reset();
 
   void refreshTextureList();
+  void refreshTextureList(FilterType filterType, const QString &filterStr);
 
   ResourcePreview *UI_CreateThumbnail(ThumbnailStrip *strip);
   void UI_CreateThumbnails();
@@ -266,7 +288,6 @@ private:
   void setFitToWindow(bool checked);
 
   void setCurrentZoomValue(float zoom);
-  float getCurrentZoomValue();
 
   bool ScrollUpdateScrollbars = true;
 

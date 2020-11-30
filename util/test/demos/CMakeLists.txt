@@ -26,6 +26,7 @@ set(VULKAN_SRC
         vk/vk_int8_ibuffer.cpp
         vk/vk_khr_buffer_address.cpp
         vk/vk_large_buffer.cpp
+        vk/vk_large_descriptor_sets.cpp
         vk/vk_line_raster.cpp
         vk/vk_mesh_zoo.cpp
         vk/vk_misaligned_dirty.cpp
@@ -65,6 +66,7 @@ set(OPENGL_SRC
         gl/gl_cbuffer_zoo.cpp
         gl/gl_depthstencil_fbo.cpp
         gl/gl_discard_zoo.cpp
+        gl/gl_draw_zoo.cpp
         gl/gl_empty_capture.cpp
         gl/gl_entry_points.cpp
         gl/gl_large_bcn_arrays.cpp
@@ -79,10 +81,12 @@ set(OPENGL_SRC
         gl/gl_overlay_test.cpp
         gl/gl_parameter_zoo.cpp
         gl/gl_per_type_tex_units.cpp
+        gl/gl_queries_in_use.cpp
         gl/gl_resource_lifetimes.cpp
         gl/gl_runtime_bind_prog_to_pipe.cpp
         gl/gl_separable_geometry_shader.cpp
         gl/gl_shader_editing.cpp
+        gl/gl_shader_isa.cpp
         gl/gl_simple_triangle.cpp
         gl/gl_spirv_shader.cpp
         gl/gl_state_trashing.cpp

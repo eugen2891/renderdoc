@@ -31,10 +31,6 @@
 #include "d3d12_manager.h"
 #include "d3d12_resources.h"
 
-RDOC_CONFIG(bool, D3D12_Debug_HideInitialDescriptors, false,
-            "Hide the initial contents of descriptor heaps. "
-            "For extremely large descriptor heaps this can drastically reduce memory consumption.");
-
 bool D3D12ResourceManager::Prepare_InitialState(ID3D12DeviceChild *res)
 {
   ResourceId id = GetResID(res);
@@ -54,7 +50,7 @@ bool D3D12ResourceManager::Prepare_InitialState(ID3D12DeviceChild *res)
   }
   else if(type == Resource_Resource)
   {
-    WrappedID3D12Resource1 *r = (WrappedID3D12Resource1 *)res;
+    WrappedID3D12Resource *r = (WrappedID3D12Resource *)res;
     ID3D12Pageable *pageable = r;
 
     bool nonresident = false;
@@ -254,7 +250,7 @@ bool D3D12ResourceManager::Prepare_InitialState(ID3D12DeviceChild *res)
         m_Device->FlushLists();
 
         // expand multisamples out to array
-        m_Device->GetDebugManager()->CopyTex2DMSToArray(arrayTexture, r->GetReal());
+        m_Device->GetDebugManager()->CopyTex2DMSToArray(NULL, arrayTexture, r->GetReal());
 
         // open the initial state list again for the remainder of the work
         list = Unwrap(m_Device->GetInitialStateList());
@@ -430,16 +426,15 @@ bool D3D12ResourceManager::Serialise_InitialState(SerialiserType &ser, ResourceI
     D3D12Descriptor *Descriptors = initial ? initial->descriptors : NULL;
     uint32_t numElems = initial ? initial->numDescriptors : 0;
 
-    const bool hide = D3D12_Debug_HideInitialDescriptors();
-
-    if(hide)
-      ser.PushInternal();
+    // there's no point in setting up a lazy array when we're structured exporting because we KNOW
+    // we're going to need all the data anyway.
+    if(!IsStructuredExporting(m_State))
+      ser.SetLazyThreshold(1000);
 
     SERIALISE_ELEMENT_ARRAY(Descriptors, numElems);
     SERIALISE_ELEMENT(numElems);
 
-    if(hide)
-      ser.PopInternal();
+    ser.SetLazyThreshold(0);
 
     SERIALISE_CHECK_READ_ERRORS();
 

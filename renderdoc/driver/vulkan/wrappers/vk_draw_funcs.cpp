@@ -274,7 +274,7 @@ void WrappedVulkan::vkCmdDraw(VkCommandBuffer commandBuffer, uint32_t vertexCoun
     SCOPED_SERIALISE_CHUNK(VulkanChunk::vkCmdDraw);
     Serialise_vkCmdDraw(ser, commandBuffer, vertexCount, instanceCount, firstVertex, firstInstance);
 
-    record->AddChunk(scope.Get(record->cmdInfo->alloc));
+    record->AddChunk(scope.Get(&record->cmdInfo->alloc));
   }
 }
 
@@ -376,7 +376,7 @@ void WrappedVulkan::vkCmdDrawIndexed(VkCommandBuffer commandBuffer, uint32_t ind
     Serialise_vkCmdDrawIndexed(ser, commandBuffer, indexCount, instanceCount, firstIndex,
                                vertexOffset, firstInstance);
 
-    record->AddChunk(scope.Get(record->cmdInfo->alloc));
+    record->AddChunk(scope.Get(&record->cmdInfo->alloc));
   }
 }
 
@@ -670,7 +670,7 @@ bool WrappedVulkan::Serialise_vkCmdDrawIndirect(SerialiserType &ser, VkCommandBu
         AddEvent();
 
         // add a fake chunk for this individual indirect draw
-        SDChunk *fakeChunk = new SDChunk("Indirect sub-command");
+        SDChunk *fakeChunk = new SDChunk("Indirect sub-command"_lit);
         fakeChunk->metadata = baseChunk->metadata;
         fakeChunk->metadata.chunkID = (uint32_t)VulkanChunk::vkCmdIndirectSubCommand;
 
@@ -738,7 +738,7 @@ bool WrappedVulkan::Serialise_vkCmdDrawIndirect(SerialiserType &ser, VkCommandBu
         multi.flags |= DrawFlags::Drawcall | DrawFlags::Instanced | DrawFlags::Indirect;
 
         // add a fake chunk for this individual indirect draw
-        SDChunk *fakeChunk = new SDChunk("Indirect sub-command");
+        SDChunk *fakeChunk = new SDChunk("Indirect sub-command"_lit);
         fakeChunk->metadata = baseChunk->metadata;
         fakeChunk->metadata.chunkID = (uint32_t)VulkanChunk::vkCmdIndirectSubCommand;
 
@@ -792,7 +792,7 @@ void WrappedVulkan::vkCmdDrawIndirect(VkCommandBuffer commandBuffer, VkBuffer bu
     SCOPED_SERIALISE_CHUNK(VulkanChunk::vkCmdDrawIndirect);
     Serialise_vkCmdDrawIndirect(ser, commandBuffer, buffer, offset, count, stride);
 
-    record->AddChunk(scope.Get(record->cmdInfo->alloc));
+    record->AddChunk(scope.Get(&record->cmdInfo->alloc));
 
     VkDeviceSize size = 0;
     if(count > 0)
@@ -1053,7 +1053,7 @@ bool WrappedVulkan::Serialise_vkCmdDrawIndexedIndirect(SerialiserType &ser,
         AddEvent();
 
         // add a fake chunk for this individual indirect draw
-        SDChunk *fakeChunk = new SDChunk("Indirect sub-command");
+        SDChunk *fakeChunk = new SDChunk("Indirect sub-command"_lit);
         fakeChunk->metadata = baseChunk->metadata;
         fakeChunk->metadata.chunkID = (uint32_t)VulkanChunk::vkCmdIndirectSubCommand;
 
@@ -1124,7 +1124,7 @@ bool WrappedVulkan::Serialise_vkCmdDrawIndexedIndirect(SerialiserType &ser,
             DrawFlags::Drawcall | DrawFlags::Instanced | DrawFlags::Indexed | DrawFlags::Indirect;
 
         // add a fake chunk for this individual indirect draw
-        SDChunk *fakeChunk = new SDChunk("Indirect sub-command");
+        SDChunk *fakeChunk = new SDChunk("Indirect sub-command"_lit);
         fakeChunk->metadata = baseChunk->metadata;
         fakeChunk->metadata.chunkID = (uint32_t)VulkanChunk::vkCmdIndirectSubCommand;
 
@@ -1178,7 +1178,7 @@ void WrappedVulkan::vkCmdDrawIndexedIndirect(VkCommandBuffer commandBuffer, VkBu
     SCOPED_SERIALISE_CHUNK(VulkanChunk::vkCmdDrawIndexedIndirect);
     Serialise_vkCmdDrawIndexedIndirect(ser, commandBuffer, buffer, offset, count, stride);
 
-    record->AddChunk(scope.Get(record->cmdInfo->alloc));
+    record->AddChunk(scope.Get(&record->cmdInfo->alloc));
 
     VkDeviceSize size = 0;
     if(count > 0)
@@ -1262,7 +1262,7 @@ void WrappedVulkan::vkCmdDispatch(VkCommandBuffer commandBuffer, uint32_t x, uin
     SCOPED_SERIALISE_CHUNK(VulkanChunk::vkCmdDispatch);
     Serialise_vkCmdDispatch(ser, commandBuffer, x, y, z);
 
-    record->AddChunk(scope.Get(record->cmdInfo->alloc));
+    record->AddChunk(scope.Get(&record->cmdInfo->alloc));
   }
 }
 
@@ -1351,7 +1351,7 @@ void WrappedVulkan::vkCmdDispatchIndirect(VkCommandBuffer commandBuffer, VkBuffe
     SCOPED_SERIALISE_CHUNK(VulkanChunk::vkCmdDispatchIndirect);
     Serialise_vkCmdDispatchIndirect(ser, commandBuffer, buffer, offset);
 
-    record->AddChunk(scope.Get(record->cmdInfo->alloc));
+    record->AddChunk(scope.Get(&record->cmdInfo->alloc));
 
     record->MarkBufferFrameReferenced(GetRecord(buffer), offset, sizeof(VkDispatchIndirectCommand),
                                       eFrameRef_Read);
@@ -1478,7 +1478,7 @@ void WrappedVulkan::vkCmdBlitImage(VkCommandBuffer commandBuffer, VkImage srcIma
     Serialise_vkCmdBlitImage(ser, commandBuffer, srcImage, srcImageLayout, destImage,
                              destImageLayout, regionCount, pRegions, filter);
 
-    record->AddChunk(scope.Get(record->cmdInfo->alloc));
+    record->AddChunk(scope.Get(&record->cmdInfo->alloc));
 
     for(uint32_t i = 0; i < regionCount; i++)
     {
@@ -1486,22 +1486,22 @@ void WrappedVulkan::vkCmdBlitImage(VkCommandBuffer commandBuffer, VkImage srcIma
 
       ImageRange srcRange(region.srcSubresource);
 
-      srcRange.offset = {std::min(region.srcOffsets[0].x, region.srcOffsets[1].x),
-                         std::min(region.srcOffsets[0].y, region.srcOffsets[1].y),
-                         std::min(region.srcOffsets[0].z, region.srcOffsets[1].z)};
+      srcRange.offset = {RDCMIN(region.srcOffsets[0].x, region.srcOffsets[1].x),
+                         RDCMIN(region.srcOffsets[0].y, region.srcOffsets[1].y),
+                         RDCMIN(region.srcOffsets[0].z, region.srcOffsets[1].z)};
       srcRange.extent = {
-          (uint32_t)(std::max(region.srcOffsets[0].x, region.srcOffsets[1].x) - srcRange.offset.x),
-          (uint32_t)(std::max(region.srcOffsets[0].y, region.srcOffsets[1].y) - srcRange.offset.y),
-          (uint32_t)(std::max(region.srcOffsets[0].z, region.srcOffsets[1].z) - srcRange.offset.z)};
+          (uint32_t)(RDCMAX(region.srcOffsets[0].x, region.srcOffsets[1].x) - srcRange.offset.x),
+          (uint32_t)(RDCMAX(region.srcOffsets[0].y, region.srcOffsets[1].y) - srcRange.offset.y),
+          (uint32_t)(RDCMAX(region.srcOffsets[0].z, region.srcOffsets[1].z) - srcRange.offset.z)};
 
       ImageRange dstRange(region.dstSubresource);
-      dstRange.offset = {std::min(region.dstOffsets[0].x, region.dstOffsets[1].x),
-                         std::min(region.dstOffsets[0].y, region.dstOffsets[1].y),
-                         std::min(region.dstOffsets[0].z, region.dstOffsets[1].z)};
+      dstRange.offset = {RDCMIN(region.dstOffsets[0].x, region.dstOffsets[1].x),
+                         RDCMIN(region.dstOffsets[0].y, region.dstOffsets[1].y),
+                         RDCMIN(region.dstOffsets[0].z, region.dstOffsets[1].z)};
       dstRange.extent = {
-          (uint32_t)(std::max(region.dstOffsets[0].x, region.dstOffsets[1].x) - dstRange.offset.x),
-          (uint32_t)(std::max(region.dstOffsets[0].y, region.dstOffsets[1].y) - dstRange.offset.y),
-          (uint32_t)(std::max(region.dstOffsets[0].z, region.dstOffsets[1].z) - dstRange.offset.z)};
+          (uint32_t)(RDCMAX(region.dstOffsets[0].x, region.dstOffsets[1].x) - dstRange.offset.x),
+          (uint32_t)(RDCMAX(region.dstOffsets[0].y, region.dstOffsets[1].y) - dstRange.offset.y),
+          (uint32_t)(RDCMAX(region.dstOffsets[0].z, region.dstOffsets[1].z) - dstRange.offset.z)};
 
       record->MarkImageFrameReferenced(GetRecord(srcImage), srcRange, eFrameRef_Read);
       record->MarkImageFrameReferenced(GetRecord(destImage), dstRange, eFrameRef_CompleteWrite);
@@ -1627,7 +1627,7 @@ void WrappedVulkan::vkCmdResolveImage(VkCommandBuffer commandBuffer, VkImage src
     Serialise_vkCmdResolveImage(ser, commandBuffer, srcImage, srcImageLayout, destImage,
                                 destImageLayout, regionCount, pRegions);
 
-    record->AddChunk(scope.Get(record->cmdInfo->alloc));
+    record->AddChunk(scope.Get(&record->cmdInfo->alloc));
 
     for(uint32_t i = 0; i < regionCount; i++)
     {
@@ -1765,7 +1765,7 @@ void WrappedVulkan::vkCmdCopyImage(VkCommandBuffer commandBuffer, VkImage srcIma
     Serialise_vkCmdCopyImage(ser, commandBuffer, srcImage, srcImageLayout, destImage,
                              destImageLayout, regionCount, pRegions);
 
-    record->AddChunk(scope.Get(record->cmdInfo->alloc));
+    record->AddChunk(scope.Get(&record->cmdInfo->alloc));
     for(uint32_t i = 0; i < regionCount; i++)
     {
       const VkImageCopy &region = pRegions[i];
@@ -1888,7 +1888,7 @@ void WrappedVulkan::vkCmdCopyBufferToImage(VkCommandBuffer commandBuffer, VkBuff
     Serialise_vkCmdCopyBufferToImage(ser, commandBuffer, srcBuffer, destImage, destImageLayout,
                                      regionCount, pRegions);
 
-    record->AddChunk(scope.Get(record->cmdInfo->alloc));
+    record->AddChunk(scope.Get(&record->cmdInfo->alloc));
     record->MarkBufferImageCopyFrameReferenced(GetRecord(srcBuffer), GetRecord(destImage),
                                                regionCount, pRegions, eFrameRef_Read,
                                                eFrameRef_CompleteWrite);
@@ -2001,7 +2001,7 @@ void WrappedVulkan::vkCmdCopyImageToBuffer(VkCommandBuffer commandBuffer, VkImag
     Serialise_vkCmdCopyImageToBuffer(ser, commandBuffer, srcImage, srcImageLayout, destBuffer,
                                      regionCount, pRegions);
 
-    record->AddChunk(scope.Get(record->cmdInfo->alloc));
+    record->AddChunk(scope.Get(&record->cmdInfo->alloc));
     record->MarkBufferImageCopyFrameReferenced(GetRecord(destBuffer), GetRecord(srcImage),
                                                regionCount, pRegions, eFrameRef_CompleteWrite,
                                                eFrameRef_Read);
@@ -2114,7 +2114,7 @@ void WrappedVulkan::vkCmdCopyBuffer(VkCommandBuffer commandBuffer, VkBuffer srcB
     SCOPED_SERIALISE_CHUNK(VulkanChunk::vkCmdCopyBuffer);
     Serialise_vkCmdCopyBuffer(ser, commandBuffer, srcBuffer, destBuffer, regionCount, pRegions);
 
-    record->AddChunk(scope.Get(record->cmdInfo->alloc));
+    record->AddChunk(scope.Get(&record->cmdInfo->alloc));
     for(uint32_t i = 0; i < regionCount; i++)
     {
       record->MarkBufferFrameReferenced(GetRecord(srcBuffer), pRegions[i].srcOffset,
@@ -2211,7 +2211,7 @@ void WrappedVulkan::vkCmdFillBuffer(VkCommandBuffer commandBuffer, VkBuffer dest
     SCOPED_SERIALISE_CHUNK(VulkanChunk::vkCmdFillBuffer);
     Serialise_vkCmdFillBuffer(ser, commandBuffer, destBuffer, destOffset, fillSize, data);
 
-    record->AddChunk(scope.Get(record->cmdInfo->alloc));
+    record->AddChunk(scope.Get(&record->cmdInfo->alloc));
 
     record->MarkBufferFrameReferenced(GetRecord(destBuffer), destOffset, fillSize,
                                       eFrameRef_CompleteWrite);
@@ -2320,7 +2320,7 @@ void WrappedVulkan::vkCmdClearColorImage(VkCommandBuffer commandBuffer, VkImage 
     Serialise_vkCmdClearColorImage(ser, commandBuffer, image, imageLayout, pColor, rangeCount,
                                    pRanges);
 
-    record->AddChunk(scope.Get(record->cmdInfo->alloc));
+    record->AddChunk(scope.Get(&record->cmdInfo->alloc));
     record->MarkResourceFrameReferenced(GetRecord(image)->baseResource, eFrameRef_Read);
     VkResourceRecord *imageRecord = GetRecord(image);
     if(imageRecord->resInfo && imageRecord->resInfo->IsSparse())
@@ -2437,7 +2437,7 @@ void WrappedVulkan::vkCmdClearDepthStencilImage(VkCommandBuffer commandBuffer, V
     Serialise_vkCmdClearDepthStencilImage(ser, commandBuffer, image, imageLayout, pDepthStencil,
                                           rangeCount, pRanges);
 
-    record->AddChunk(scope.Get(record->cmdInfo->alloc));
+    record->AddChunk(scope.Get(&record->cmdInfo->alloc));
     record->MarkResourceFrameReferenced(GetResID(image), eFrameRef_PartialWrite);
     record->MarkResourceFrameReferenced(GetRecord(image)->baseResource, eFrameRef_Read);
     VkResourceRecord *imageRecord = GetRecord(image);
@@ -2591,7 +2591,7 @@ void WrappedVulkan::vkCmdClearAttachments(VkCommandBuffer commandBuffer, uint32_
     Serialise_vkCmdClearAttachments(ser, commandBuffer, attachmentCount, pAttachments, rectCount,
                                     pRects);
 
-    record->AddChunk(scope.Get(record->cmdInfo->alloc));
+    record->AddChunk(scope.Get(&record->cmdInfo->alloc));
 
     // image/attachments are referenced when the render pass is started and the framebuffer is
     // bound.
@@ -2691,7 +2691,7 @@ void WrappedVulkan::vkCmdDispatchBase(VkCommandBuffer commandBuffer, uint32_t ba
     Serialise_vkCmdDispatchBase(ser, commandBuffer, baseGroupX, baseGroupY, baseGroupZ, groupCountX,
                                 groupCountY, groupCountZ);
 
-    record->AddChunk(scope.Get(record->cmdInfo->alloc));
+    record->AddChunk(scope.Get(&record->cmdInfo->alloc));
   }
 }
 
@@ -2947,7 +2947,7 @@ bool WrappedVulkan::Serialise_vkCmdDrawIndirectCount(SerialiserType &ser,
         multi.flags |= DrawFlags::Drawcall | DrawFlags::Instanced | DrawFlags::Indirect;
 
         // add a fake chunk for this individual indirect draw
-        SDChunk *fakeChunk = new SDChunk("Indirect sub-command");
+        SDChunk *fakeChunk = new SDChunk("Indirect sub-command"_lit);
         fakeChunk->metadata = baseChunk->metadata;
         fakeChunk->metadata.chunkID = (uint32_t)VulkanChunk::vkCmdIndirectSubCommand;
 
@@ -3002,7 +3002,7 @@ void WrappedVulkan::vkCmdDrawIndirectCount(VkCommandBuffer commandBuffer, VkBuff
     Serialise_vkCmdDrawIndirectCount(ser, commandBuffer, buffer, offset, countBuffer,
                                      countBufferOffset, maxDrawCount, stride);
 
-    record->AddChunk(scope.Get(record->cmdInfo->alloc));
+    record->AddChunk(scope.Get(&record->cmdInfo->alloc));
 
     record->MarkBufferFrameReferenced(GetRecord(buffer), offset,
                                       stride * (maxDrawCount - 1) + sizeof(VkDrawIndirectCommand),
@@ -3310,7 +3310,7 @@ bool WrappedVulkan::Serialise_vkCmdDrawIndexedIndirectCount(
             DrawFlags::Drawcall | DrawFlags::Instanced | DrawFlags::Indexed | DrawFlags::Indirect;
 
         // add a fake chunk for this individual indirect draw
-        SDChunk *fakeChunk = new SDChunk("Indirect sub-command");
+        SDChunk *fakeChunk = new SDChunk("Indirect sub-command"_lit);
         fakeChunk->metadata = baseChunk->metadata;
         fakeChunk->metadata.chunkID = (uint32_t)VulkanChunk::vkCmdIndirectSubCommand;
 
@@ -3365,7 +3365,7 @@ void WrappedVulkan::vkCmdDrawIndexedIndirectCount(VkCommandBuffer commandBuffer,
     Serialise_vkCmdDrawIndexedIndirectCount(ser, commandBuffer, buffer, offset, countBuffer,
                                             countBufferOffset, maxDrawCount, stride);
 
-    record->AddChunk(scope.Get(record->cmdInfo->alloc));
+    record->AddChunk(scope.Get(&record->cmdInfo->alloc));
 
     record->MarkBufferFrameReferenced(GetRecord(buffer), offset,
                                       stride * (maxDrawCount - 1) + sizeof(VkDrawIndirectCommand),
@@ -3493,10 +3493,810 @@ void WrappedVulkan::vkCmdDrawIndirectByteCountEXT(VkCommandBuffer commandBuffer,
                                             counterBuffer, counterBufferOffset, counterOffset,
                                             vertexStride);
 
-    record->AddChunk(scope.Get(record->cmdInfo->alloc));
+    record->AddChunk(scope.Get(&record->cmdInfo->alloc));
 
     record->MarkBufferFrameReferenced(GetRecord(counterBuffer), counterBufferOffset, 4,
                                       eFrameRef_Read);
+  }
+}
+
+template <typename SerialiserType>
+bool WrappedVulkan::Serialise_vkCmdCopyBuffer2KHR(SerialiserType &ser, VkCommandBuffer commandBuffer,
+                                                  const VkCopyBufferInfo2KHR *pCopyBufferInfo)
+{
+  SERIALISE_ELEMENT(commandBuffer);
+  SERIALISE_ELEMENT_LOCAL(CopyInfo, *pCopyBufferInfo);
+
+  Serialise_DebugMessages(ser);
+
+  SERIALISE_CHECK_READ_ERRORS();
+
+  if(IsReplayingAndReading())
+  {
+    VkCopyBufferInfo2KHR unwrappedInfo = CopyInfo;
+    unwrappedInfo.srcBuffer = Unwrap(unwrappedInfo.srcBuffer);
+    unwrappedInfo.dstBuffer = Unwrap(unwrappedInfo.dstBuffer);
+
+    byte *tempMem = GetTempMemory(GetNextPatchSize(unwrappedInfo.pNext));
+
+    UnwrapNextChain(m_State, "VkCopyBufferInfo2KHR", tempMem, (VkBaseInStructure *)&unwrappedInfo);
+
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
+
+    if(IsActiveReplaying(m_State))
+    {
+      if(InRerecordRange(m_LastCmdBufferID))
+      {
+        commandBuffer = RerecordCmdBuf(m_LastCmdBufferID);
+
+        uint32_t eventId = HandlePreCallback(commandBuffer, DrawFlags::Copy);
+
+        ObjDisp(commandBuffer)->CmdCopyBuffer2KHR(Unwrap(commandBuffer), &unwrappedInfo);
+
+        if(eventId && m_DrawcallCallback->PostMisc(eventId, DrawFlags::Copy, commandBuffer))
+        {
+          ObjDisp(commandBuffer)->CmdCopyBuffer2KHR(Unwrap(commandBuffer), &unwrappedInfo);
+
+          m_DrawcallCallback->PostRemisc(eventId, DrawFlags::Copy, commandBuffer);
+        }
+      }
+    }
+    else
+    {
+      ObjDisp(commandBuffer)->CmdCopyBuffer2KHR(Unwrap(commandBuffer), &unwrappedInfo);
+
+      {
+        AddEvent();
+
+        ResourceId srcid = GetResourceManager()->GetOriginalID(GetResID(CopyInfo.srcBuffer));
+        ResourceId dstid = GetResourceManager()->GetOriginalID(GetResID(CopyInfo.dstBuffer));
+
+        DrawcallDescription draw;
+        draw.name = StringFormat::Fmt("vkCmdCopyBuffer2KHR(%s, %s)", ToStr(srcid).c_str(),
+                                      ToStr(dstid).c_str());
+        draw.flags |= DrawFlags::Copy;
+
+        draw.copySource = srcid;
+        draw.copySourceSubresource = Subresource();
+        draw.copyDestination = dstid;
+        draw.copyDestinationSubresource = Subresource();
+
+        AddDrawcall(draw, true);
+
+        VulkanDrawcallTreeNode &drawNode = GetDrawcallStack().back()->children.back();
+
+        if(srcid == dstid)
+        {
+          drawNode.resourceUsage.push_back(make_rdcpair(
+              GetResID(CopyInfo.srcBuffer), EventUsage(drawNode.draw.eventId, ResourceUsage::Copy)));
+        }
+        else
+        {
+          drawNode.resourceUsage.push_back(
+              make_rdcpair(GetResID(CopyInfo.srcBuffer),
+                           EventUsage(drawNode.draw.eventId, ResourceUsage::CopySrc)));
+          drawNode.resourceUsage.push_back(
+              make_rdcpair(GetResID(CopyInfo.dstBuffer),
+                           EventUsage(drawNode.draw.eventId, ResourceUsage::CopyDst)));
+        }
+      }
+    }
+  }
+
+  return true;
+}
+
+void WrappedVulkan::vkCmdCopyBuffer2KHR(VkCommandBuffer commandBuffer,
+                                        const VkCopyBufferInfo2KHR *pCopyBufferInfo)
+{
+  SCOPED_DBG_SINK();
+
+  VkCopyBufferInfo2KHR unwrappedInfo = *pCopyBufferInfo;
+  unwrappedInfo.srcBuffer = Unwrap(unwrappedInfo.srcBuffer);
+  unwrappedInfo.dstBuffer = Unwrap(unwrappedInfo.dstBuffer);
+
+  byte *tempMem = GetTempMemory(GetNextPatchSize(unwrappedInfo.pNext));
+
+  UnwrapNextChain(m_State, "VkCopyBufferInfo2KHR", tempMem, (VkBaseInStructure *)&unwrappedInfo);
+
+  SERIALISE_TIME_CALL(
+      ObjDisp(commandBuffer)->CmdCopyBuffer2KHR(Unwrap(commandBuffer), &unwrappedInfo));
+
+  if(IsCaptureMode(m_State))
+  {
+    VkResourceRecord *record = GetRecord(commandBuffer);
+
+    CACHE_THREAD_SERIALISER();
+
+    ser.SetDrawChunk();
+    SCOPED_SERIALISE_CHUNK(VulkanChunk::vkCmdCopyBuffer2KHR);
+    Serialise_vkCmdCopyBuffer2KHR(ser, commandBuffer, pCopyBufferInfo);
+
+    record->AddChunk(scope.Get(&record->cmdInfo->alloc));
+
+    for(uint32_t i = 0; i < pCopyBufferInfo->regionCount; i++)
+    {
+      record->MarkBufferFrameReferenced(GetRecord(pCopyBufferInfo->srcBuffer),
+                                        pCopyBufferInfo->pRegions[i].srcOffset,
+                                        pCopyBufferInfo->pRegions[i].size, eFrameRef_Read);
+      record->MarkBufferFrameReferenced(GetRecord(pCopyBufferInfo->dstBuffer),
+                                        pCopyBufferInfo->pRegions[i].dstOffset,
+                                        pCopyBufferInfo->pRegions[i].size, eFrameRef_CompleteWrite);
+    }
+  }
+}
+
+template <typename SerialiserType>
+bool WrappedVulkan::Serialise_vkCmdCopyImage2KHR(SerialiserType &ser, VkCommandBuffer commandBuffer,
+                                                 const VkCopyImageInfo2KHR *pCopyImageInfo)
+{
+  SERIALISE_ELEMENT(commandBuffer);
+  SERIALISE_ELEMENT_LOCAL(CopyInfo, *pCopyImageInfo);
+
+  Serialise_DebugMessages(ser);
+
+  SERIALISE_CHECK_READ_ERRORS();
+
+  if(IsReplayingAndReading())
+  {
+    VkCopyImageInfo2KHR unwrappedInfo = CopyInfo;
+    unwrappedInfo.srcImage = Unwrap(unwrappedInfo.srcImage);
+    unwrappedInfo.dstImage = Unwrap(unwrappedInfo.dstImage);
+
+    byte *tempMem = GetTempMemory(GetNextPatchSize(unwrappedInfo.pNext));
+
+    UnwrapNextChain(m_State, "VkCopyImageInfo2KHR", tempMem, (VkBaseInStructure *)&unwrappedInfo);
+
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
+
+    if(IsActiveReplaying(m_State))
+    {
+      if(InRerecordRange(m_LastCmdBufferID))
+      {
+        commandBuffer = RerecordCmdBuf(m_LastCmdBufferID);
+
+        uint32_t eventId = HandlePreCallback(commandBuffer, DrawFlags::Copy);
+
+        ObjDisp(commandBuffer)->CmdCopyImage2KHR(Unwrap(commandBuffer), &unwrappedInfo);
+
+        if(eventId && m_DrawcallCallback->PostMisc(eventId, DrawFlags::Copy, commandBuffer))
+        {
+          ObjDisp(commandBuffer)->CmdCopyImage2KHR(Unwrap(commandBuffer), &unwrappedInfo);
+
+          m_DrawcallCallback->PostRemisc(eventId, DrawFlags::Copy, commandBuffer);
+        }
+      }
+    }
+    else
+    {
+      ObjDisp(commandBuffer)->CmdCopyImage2KHR(Unwrap(commandBuffer), &unwrappedInfo);
+
+      {
+        AddEvent();
+
+        ResourceId srcid = GetResourceManager()->GetOriginalID(GetResID(CopyInfo.srcImage));
+        ResourceId dstid = GetResourceManager()->GetOriginalID(GetResID(CopyInfo.dstImage));
+
+        DrawcallDescription draw;
+        draw.name = StringFormat::Fmt("vkCmdCopyImage2KHR(%s, %s)", ToStr(srcid).c_str(),
+                                      ToStr(dstid).c_str());
+        draw.flags |= DrawFlags::Copy;
+
+        draw.copySource = srcid;
+        draw.copySourceSubresource = Subresource();
+        draw.copyDestination = dstid;
+        draw.copyDestinationSubresource = Subresource();
+
+        AddDrawcall(draw, true);
+
+        VulkanDrawcallTreeNode &drawNode = GetDrawcallStack().back()->children.back();
+
+        if(srcid == dstid)
+        {
+          drawNode.resourceUsage.push_back(make_rdcpair(
+              GetResID(CopyInfo.srcImage), EventUsage(drawNode.draw.eventId, ResourceUsage::Copy)));
+        }
+        else
+        {
+          drawNode.resourceUsage.push_back(make_rdcpair(
+              GetResID(CopyInfo.srcImage), EventUsage(drawNode.draw.eventId, ResourceUsage::CopySrc)));
+          drawNode.resourceUsage.push_back(make_rdcpair(
+              GetResID(CopyInfo.dstImage), EventUsage(drawNode.draw.eventId, ResourceUsage::CopyDst)));
+        }
+      }
+    }
+  }
+
+  return true;
+}
+
+void WrappedVulkan::vkCmdCopyImage2KHR(VkCommandBuffer commandBuffer,
+                                       const VkCopyImageInfo2KHR *pCopyImageInfo)
+{
+  SCOPED_DBG_SINK();
+
+  VkCopyImageInfo2KHR unwrappedInfo = *pCopyImageInfo;
+  unwrappedInfo.srcImage = Unwrap(unwrappedInfo.srcImage);
+  unwrappedInfo.dstImage = Unwrap(unwrappedInfo.dstImage);
+
+  byte *tempMem = GetTempMemory(GetNextPatchSize(unwrappedInfo.pNext));
+
+  UnwrapNextChain(m_State, "VkCopyImageInfo2KHR", tempMem, (VkBaseInStructure *)&unwrappedInfo);
+
+  SERIALISE_TIME_CALL(ObjDisp(commandBuffer)->CmdCopyImage2KHR(Unwrap(commandBuffer), &unwrappedInfo));
+
+  if(IsCaptureMode(m_State))
+  {
+    VkResourceRecord *record = GetRecord(commandBuffer);
+
+    CACHE_THREAD_SERIALISER();
+
+    ser.SetDrawChunk();
+    SCOPED_SERIALISE_CHUNK(VulkanChunk::vkCmdCopyImage2KHR);
+    Serialise_vkCmdCopyImage2KHR(ser, commandBuffer, pCopyImageInfo);
+
+    record->AddChunk(scope.Get(&record->cmdInfo->alloc));
+
+    for(uint32_t i = 0; i < pCopyImageInfo->regionCount; i++)
+    {
+      const VkImageCopy2KHR &region = pCopyImageInfo->pRegions[i];
+
+      ImageRange srcRange(region.srcSubresource);
+      srcRange.offset = region.srcOffset;
+      srcRange.extent = region.extent;
+
+      ImageRange dstRange(region.dstSubresource);
+      dstRange.offset = region.dstOffset;
+      dstRange.extent = region.extent;
+
+      record->MarkImageFrameReferenced(GetRecord(pCopyImageInfo->srcImage), srcRange, eFrameRef_Read);
+      record->MarkImageFrameReferenced(GetRecord(pCopyImageInfo->dstImage), dstRange,
+                                       eFrameRef_CompleteWrite);
+    }
+  }
+}
+
+template <typename SerialiserType>
+bool WrappedVulkan::Serialise_vkCmdCopyBufferToImage2KHR(
+    SerialiserType &ser, VkCommandBuffer commandBuffer,
+    const VkCopyBufferToImageInfo2KHR *pCopyBufferToImageInfo)
+{
+  SERIALISE_ELEMENT(commandBuffer);
+  SERIALISE_ELEMENT_LOCAL(CopyInfo, *pCopyBufferToImageInfo);
+
+  Serialise_DebugMessages(ser);
+
+  SERIALISE_CHECK_READ_ERRORS();
+
+  if(IsReplayingAndReading())
+  {
+    VkCopyBufferToImageInfo2KHR unwrappedInfo = CopyInfo;
+    unwrappedInfo.srcBuffer = Unwrap(unwrappedInfo.srcBuffer);
+    unwrappedInfo.dstImage = Unwrap(unwrappedInfo.dstImage);
+
+    byte *tempMem = GetTempMemory(GetNextPatchSize(unwrappedInfo.pNext));
+
+    UnwrapNextChain(m_State, "VkCopyBufferToImageInfo2KHR", tempMem,
+                    (VkBaseInStructure *)&unwrappedInfo);
+
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
+
+    if(IsActiveReplaying(m_State))
+    {
+      if(InRerecordRange(m_LastCmdBufferID))
+      {
+        commandBuffer = RerecordCmdBuf(m_LastCmdBufferID);
+
+        uint32_t eventId = HandlePreCallback(commandBuffer, DrawFlags::Copy);
+
+        ObjDisp(commandBuffer)->CmdCopyBufferToImage2KHR(Unwrap(commandBuffer), &unwrappedInfo);
+
+        if(eventId && m_DrawcallCallback->PostMisc(eventId, DrawFlags::Copy, commandBuffer))
+        {
+          ObjDisp(commandBuffer)->CmdCopyBufferToImage2KHR(Unwrap(commandBuffer), &unwrappedInfo);
+
+          m_DrawcallCallback->PostRemisc(eventId, DrawFlags::Copy, commandBuffer);
+        }
+      }
+    }
+    else
+    {
+      ObjDisp(commandBuffer)->CmdCopyBufferToImage2KHR(Unwrap(commandBuffer), &unwrappedInfo);
+
+      {
+        AddEvent();
+
+        ResourceId bufid = GetResourceManager()->GetOriginalID(GetResID(CopyInfo.srcBuffer));
+        ResourceId imgid = GetResourceManager()->GetOriginalID(GetResID(CopyInfo.dstImage));
+
+        DrawcallDescription draw;
+        draw.name = StringFormat::Fmt("vkCmdCopyBufferToImage2KHR(%s, %s)", ToStr(bufid).c_str(),
+                                      ToStr(imgid).c_str());
+        draw.flags |= DrawFlags::Copy;
+
+        draw.copySource = bufid;
+        draw.copySourceSubresource = Subresource();
+        draw.copyDestination = imgid;
+        draw.copyDestinationSubresource = Subresource();
+        if(CopyInfo.regionCount > 0)
+          draw.copyDestinationSubresource =
+              Subresource(CopyInfo.pRegions[0].imageSubresource.mipLevel,
+                          CopyInfo.pRegions[0].imageSubresource.baseArrayLayer);
+
+        AddDrawcall(draw, true);
+
+        VulkanDrawcallTreeNode &drawNode = GetDrawcallStack().back()->children.back();
+
+        drawNode.resourceUsage.push_back(make_rdcpair(
+            GetResID(CopyInfo.srcBuffer), EventUsage(drawNode.draw.eventId, ResourceUsage::CopySrc)));
+        drawNode.resourceUsage.push_back(make_rdcpair(
+            GetResID(CopyInfo.dstImage), EventUsage(drawNode.draw.eventId, ResourceUsage::CopyDst)));
+      }
+    }
+  }
+
+  return true;
+}
+
+void WrappedVulkan::vkCmdCopyBufferToImage2KHR(VkCommandBuffer commandBuffer,
+                                               const VkCopyBufferToImageInfo2KHR *pCopyBufferToImageInfo)
+{
+  SCOPED_DBG_SINK();
+
+  VkCopyBufferToImageInfo2KHR unwrappedInfo = *pCopyBufferToImageInfo;
+  unwrappedInfo.srcBuffer = Unwrap(unwrappedInfo.srcBuffer);
+  unwrappedInfo.dstImage = Unwrap(unwrappedInfo.dstImage);
+
+  byte *tempMem = GetTempMemory(GetNextPatchSize(unwrappedInfo.pNext));
+
+  UnwrapNextChain(m_State, "VkCopyBufferToImageInfo2KHR", tempMem,
+                  (VkBaseInStructure *)&unwrappedInfo);
+
+  SERIALISE_TIME_CALL(
+      ObjDisp(commandBuffer)->CmdCopyBufferToImage2KHR(Unwrap(commandBuffer), &unwrappedInfo));
+
+  if(IsCaptureMode(m_State))
+  {
+    VkResourceRecord *record = GetRecord(commandBuffer);
+
+    CACHE_THREAD_SERIALISER();
+
+    ser.SetDrawChunk();
+    SCOPED_SERIALISE_CHUNK(VulkanChunk::vkCmdCopyBufferToImage2KHR);
+    Serialise_vkCmdCopyBufferToImage2KHR(ser, commandBuffer, pCopyBufferToImageInfo);
+
+    record->AddChunk(scope.Get(&record->cmdInfo->alloc));
+
+    // downcast the VkBufferImageCopy2KHR to VkBufferImageCopy for ease of use, as we don't need
+    // anything in the next chains here
+
+    // we're done with temp memory above so we can reuse here
+    VkBufferImageCopy *pRegions =
+        GetTempArray<VkBufferImageCopy>(pCopyBufferToImageInfo->regionCount);
+    for(uint32_t i = 0; i < pCopyBufferToImageInfo->regionCount; i++)
+    {
+      pRegions[i].bufferOffset = pCopyBufferToImageInfo->pRegions[i].bufferOffset;
+      pRegions[i].bufferRowLength = pCopyBufferToImageInfo->pRegions[i].bufferRowLength;
+      pRegions[i].bufferImageHeight = pCopyBufferToImageInfo->pRegions[i].bufferImageHeight;
+      pRegions[i].imageSubresource = pCopyBufferToImageInfo->pRegions[i].imageSubresource;
+      pRegions[i].imageOffset = pCopyBufferToImageInfo->pRegions[i].imageOffset;
+      pRegions[i].imageExtent = pCopyBufferToImageInfo->pRegions[i].imageExtent;
+    }
+
+    record->MarkBufferImageCopyFrameReferenced(
+        GetRecord(pCopyBufferToImageInfo->srcBuffer), GetRecord(pCopyBufferToImageInfo->dstImage),
+        pCopyBufferToImageInfo->regionCount, pRegions, eFrameRef_Read, eFrameRef_CompleteWrite);
+  }
+}
+
+template <typename SerialiserType>
+bool WrappedVulkan::Serialise_vkCmdCopyImageToBuffer2KHR(
+    SerialiserType &ser, VkCommandBuffer commandBuffer,
+    const VkCopyImageToBufferInfo2KHR *pCopyImageToBufferInfo)
+{
+  SERIALISE_ELEMENT(commandBuffer);
+  SERIALISE_ELEMENT_LOCAL(CopyInfo, *pCopyImageToBufferInfo);
+
+  Serialise_DebugMessages(ser);
+
+  SERIALISE_CHECK_READ_ERRORS();
+
+  if(IsReplayingAndReading())
+  {
+    VkCopyImageToBufferInfo2KHR unwrappedInfo = CopyInfo;
+    unwrappedInfo.srcImage = Unwrap(unwrappedInfo.srcImage);
+    unwrappedInfo.dstBuffer = Unwrap(unwrappedInfo.dstBuffer);
+
+    byte *tempMem = GetTempMemory(GetNextPatchSize(unwrappedInfo.pNext));
+
+    UnwrapNextChain(m_State, "VkCopyImageToBufferInfo2KHR", tempMem,
+                    (VkBaseInStructure *)&unwrappedInfo);
+
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
+
+    if(IsActiveReplaying(m_State))
+    {
+      if(InRerecordRange(m_LastCmdBufferID))
+      {
+        commandBuffer = RerecordCmdBuf(m_LastCmdBufferID);
+
+        uint32_t eventId = HandlePreCallback(commandBuffer, DrawFlags::Copy);
+
+        ObjDisp(commandBuffer)->CmdCopyImageToBuffer2KHR(Unwrap(commandBuffer), &unwrappedInfo);
+
+        if(eventId && m_DrawcallCallback->PostMisc(eventId, DrawFlags::Copy, commandBuffer))
+        {
+          ObjDisp(commandBuffer)->CmdCopyImageToBuffer2KHR(Unwrap(commandBuffer), &unwrappedInfo);
+
+          m_DrawcallCallback->PostRemisc(eventId, DrawFlags::Copy, commandBuffer);
+        }
+      }
+    }
+    else
+    {
+      ObjDisp(commandBuffer)->CmdCopyImageToBuffer2KHR(Unwrap(commandBuffer), &unwrappedInfo);
+
+      {
+        AddEvent();
+
+        ResourceId imgid = GetResourceManager()->GetOriginalID(GetResID(CopyInfo.srcImage));
+        ResourceId bufid = GetResourceManager()->GetOriginalID(GetResID(CopyInfo.dstBuffer));
+
+        DrawcallDescription draw;
+        draw.name = StringFormat::Fmt("vkCmdCopyImageToBuffer2KHR(%s, %s)", ToStr(imgid).c_str(),
+                                      ToStr(bufid).c_str());
+        draw.flags |= DrawFlags::Copy;
+
+        draw.copySource = imgid;
+        draw.copySourceSubresource = Subresource();
+        if(CopyInfo.regionCount > 0)
+          draw.copySourceSubresource =
+              Subresource(CopyInfo.pRegions[0].imageSubresource.mipLevel,
+                          CopyInfo.pRegions[0].imageSubresource.baseArrayLayer);
+        draw.copyDestination = bufid;
+        draw.copyDestinationSubresource = Subresource();
+
+        AddDrawcall(draw, true);
+
+        VulkanDrawcallTreeNode &drawNode = GetDrawcallStack().back()->children.back();
+
+        drawNode.resourceUsage.push_back(make_rdcpair(
+            GetResID(CopyInfo.srcImage), EventUsage(drawNode.draw.eventId, ResourceUsage::CopySrc)));
+        drawNode.resourceUsage.push_back(make_rdcpair(
+            GetResID(CopyInfo.dstBuffer), EventUsage(drawNode.draw.eventId, ResourceUsage::CopyDst)));
+      }
+    }
+  }
+
+  return true;
+}
+
+void WrappedVulkan::vkCmdCopyImageToBuffer2KHR(VkCommandBuffer commandBuffer,
+                                               const VkCopyImageToBufferInfo2KHR *pCopyImageToBufferInfo)
+{
+  SCOPED_DBG_SINK();
+
+  VkCopyImageToBufferInfo2KHR unwrappedInfo = *pCopyImageToBufferInfo;
+  unwrappedInfo.srcImage = Unwrap(unwrappedInfo.srcImage);
+  unwrappedInfo.dstBuffer = Unwrap(unwrappedInfo.dstBuffer);
+
+  byte *tempMem = GetTempMemory(GetNextPatchSize(unwrappedInfo.pNext));
+
+  UnwrapNextChain(m_State, "VkCopyImageToBufferInfo2KHR", tempMem,
+                  (VkBaseInStructure *)&unwrappedInfo);
+
+  SERIALISE_TIME_CALL(
+      ObjDisp(commandBuffer)->CmdCopyImageToBuffer2KHR(Unwrap(commandBuffer), &unwrappedInfo));
+
+  if(IsCaptureMode(m_State))
+  {
+    VkResourceRecord *record = GetRecord(commandBuffer);
+
+    CACHE_THREAD_SERIALISER();
+
+    ser.SetDrawChunk();
+    SCOPED_SERIALISE_CHUNK(VulkanChunk::vkCmdCopyImageToBuffer2KHR);
+    Serialise_vkCmdCopyImageToBuffer2KHR(ser, commandBuffer, pCopyImageToBufferInfo);
+
+    record->AddChunk(scope.Get(&record->cmdInfo->alloc));
+
+    // downcast the VkBufferImageCopy2KHR to VkBufferImageCopy for ease of use, as we don't need
+    // anything in the next chains here
+
+    // we're done with temp memory above so we can reuse here
+    VkBufferImageCopy *pRegions =
+        GetTempArray<VkBufferImageCopy>(pCopyImageToBufferInfo->regionCount);
+    for(uint32_t i = 0; i < pCopyImageToBufferInfo->regionCount; i++)
+    {
+      pRegions[i].bufferOffset = pCopyImageToBufferInfo->pRegions[i].bufferOffset;
+      pRegions[i].bufferRowLength = pCopyImageToBufferInfo->pRegions[i].bufferRowLength;
+      pRegions[i].bufferImageHeight = pCopyImageToBufferInfo->pRegions[i].bufferImageHeight;
+      pRegions[i].imageSubresource = pCopyImageToBufferInfo->pRegions[i].imageSubresource;
+      pRegions[i].imageOffset = pCopyImageToBufferInfo->pRegions[i].imageOffset;
+      pRegions[i].imageExtent = pCopyImageToBufferInfo->pRegions[i].imageExtent;
+    }
+
+    record->MarkBufferImageCopyFrameReferenced(
+        GetRecord(pCopyImageToBufferInfo->dstBuffer), GetRecord(pCopyImageToBufferInfo->srcImage),
+        pCopyImageToBufferInfo->regionCount, pRegions, eFrameRef_CompleteWrite, eFrameRef_Read);
+  }
+}
+
+template <typename SerialiserType>
+bool WrappedVulkan::Serialise_vkCmdBlitImage2KHR(SerialiserType &ser, VkCommandBuffer commandBuffer,
+                                                 const VkBlitImageInfo2KHR *pBlitImageInfo)
+{
+  SERIALISE_ELEMENT(commandBuffer);
+  SERIALISE_ELEMENT_LOCAL(BlitInfo, *pBlitImageInfo);
+
+  Serialise_DebugMessages(ser);
+
+  SERIALISE_CHECK_READ_ERRORS();
+
+  if(IsReplayingAndReading())
+  {
+    VkBlitImageInfo2KHR unwrappedInfo = BlitInfo;
+    unwrappedInfo.srcImage = Unwrap(unwrappedInfo.srcImage);
+    unwrappedInfo.dstImage = Unwrap(unwrappedInfo.dstImage);
+
+    byte *tempMem = GetTempMemory(GetNextPatchSize(unwrappedInfo.pNext));
+
+    UnwrapNextChain(m_State, "VkBlitImageInfo2KHR", tempMem, (VkBaseInStructure *)&unwrappedInfo);
+
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
+
+    if(IsActiveReplaying(m_State))
+    {
+      if(InRerecordRange(m_LastCmdBufferID))
+      {
+        commandBuffer = RerecordCmdBuf(m_LastCmdBufferID);
+
+        uint32_t eventId = HandlePreCallback(commandBuffer, DrawFlags::Resolve);
+
+        ObjDisp(commandBuffer)->CmdBlitImage2KHR(Unwrap(commandBuffer), &unwrappedInfo);
+
+        if(eventId && m_DrawcallCallback->PostMisc(eventId, DrawFlags::Resolve, commandBuffer))
+        {
+          ObjDisp(commandBuffer)->CmdBlitImage2KHR(Unwrap(commandBuffer), &unwrappedInfo);
+
+          m_DrawcallCallback->PostRemisc(eventId, DrawFlags::Resolve, commandBuffer);
+        }
+      }
+    }
+    else
+    {
+      ObjDisp(commandBuffer)->CmdBlitImage2KHR(Unwrap(commandBuffer), &unwrappedInfo);
+
+      {
+        AddEvent();
+
+        ResourceId srcid = GetResourceManager()->GetOriginalID(GetResID(BlitInfo.srcImage));
+        ResourceId dstid = GetResourceManager()->GetOriginalID(GetResID(BlitInfo.dstImage));
+
+        DrawcallDescription draw;
+        draw.name = StringFormat::Fmt("vkCmdBlitImage2KHR(%s, %s)", ToStr(srcid).c_str(),
+                                      ToStr(dstid).c_str());
+        draw.flags |= DrawFlags::Resolve;
+
+        draw.copySource = srcid;
+        draw.copySourceSubresource = Subresource();
+        draw.copyDestination = dstid;
+        draw.copyDestinationSubresource = Subresource();
+
+        AddDrawcall(draw, true);
+
+        VulkanDrawcallTreeNode &drawNode = GetDrawcallStack().back()->children.back();
+
+        if(srcid == dstid)
+        {
+          drawNode.resourceUsage.push_back(make_rdcpair(
+              GetResID(BlitInfo.srcImage), EventUsage(drawNode.draw.eventId, ResourceUsage::Resolve)));
+        }
+        else
+        {
+          drawNode.resourceUsage.push_back(
+              make_rdcpair(GetResID(BlitInfo.srcImage),
+                           EventUsage(drawNode.draw.eventId, ResourceUsage::ResolveSrc)));
+          drawNode.resourceUsage.push_back(
+              make_rdcpair(GetResID(BlitInfo.dstImage),
+                           EventUsage(drawNode.draw.eventId, ResourceUsage::ResolveDst)));
+        }
+      }
+    }
+  }
+
+  return true;
+}
+
+void WrappedVulkan::vkCmdBlitImage2KHR(VkCommandBuffer commandBuffer,
+                                       const VkBlitImageInfo2KHR *pBlitImageInfo)
+{
+  SCOPED_DBG_SINK();
+
+  VkBlitImageInfo2KHR unwrappedInfo = *pBlitImageInfo;
+  unwrappedInfo.srcImage = Unwrap(unwrappedInfo.srcImage);
+  unwrappedInfo.dstImage = Unwrap(unwrappedInfo.dstImage);
+
+  byte *tempMem = GetTempMemory(GetNextPatchSize(unwrappedInfo.pNext));
+
+  UnwrapNextChain(m_State, "VkBlitImageInfo2KHR", tempMem, (VkBaseInStructure *)&unwrappedInfo);
+
+  SERIALISE_TIME_CALL(ObjDisp(commandBuffer)->CmdBlitImage2KHR(Unwrap(commandBuffer), &unwrappedInfo));
+
+  if(IsCaptureMode(m_State))
+  {
+    VkResourceRecord *record = GetRecord(commandBuffer);
+
+    CACHE_THREAD_SERIALISER();
+
+    ser.SetDrawChunk();
+    SCOPED_SERIALISE_CHUNK(VulkanChunk::vkCmdBlitImage2KHR);
+    Serialise_vkCmdBlitImage2KHR(ser, commandBuffer, pBlitImageInfo);
+
+    record->AddChunk(scope.Get(&record->cmdInfo->alloc));
+
+    for(uint32_t i = 0; i < pBlitImageInfo->regionCount; i++)
+    {
+      const VkImageBlit2KHR &region = pBlitImageInfo->pRegions[i];
+
+      ImageRange srcRange(region.srcSubresource);
+      srcRange.offset = {RDCMIN(region.srcOffsets[0].x, region.srcOffsets[1].x),
+                         RDCMIN(region.srcOffsets[0].y, region.srcOffsets[1].y),
+                         RDCMIN(region.srcOffsets[0].z, region.srcOffsets[1].z)};
+      srcRange.extent = {
+          (uint32_t)(RDCMAX(region.srcOffsets[0].x, region.srcOffsets[1].x) - srcRange.offset.x),
+          (uint32_t)(RDCMAX(region.srcOffsets[0].y, region.srcOffsets[1].y) - srcRange.offset.y),
+          (uint32_t)(RDCMAX(region.srcOffsets[0].z, region.srcOffsets[1].z) - srcRange.offset.z)};
+
+      ImageRange dstRange(region.dstSubresource);
+      dstRange.offset = {RDCMIN(region.dstOffsets[0].x, region.dstOffsets[1].x),
+                         RDCMIN(region.dstOffsets[0].y, region.dstOffsets[1].y),
+                         RDCMIN(region.dstOffsets[0].z, region.dstOffsets[1].z)};
+      dstRange.extent = {
+          (uint32_t)(RDCMAX(region.dstOffsets[0].x, region.dstOffsets[1].x) - dstRange.offset.x),
+          (uint32_t)(RDCMAX(region.dstOffsets[0].y, region.dstOffsets[1].y) - dstRange.offset.y),
+          (uint32_t)(RDCMAX(region.dstOffsets[0].z, region.dstOffsets[1].z) - dstRange.offset.z)};
+
+      record->MarkImageFrameReferenced(GetRecord(pBlitImageInfo->srcImage), srcRange, eFrameRef_Read);
+      record->MarkImageFrameReferenced(GetRecord(pBlitImageInfo->dstImage), dstRange,
+                                       eFrameRef_CompleteWrite);
+    }
+  }
+}
+
+template <typename SerialiserType>
+bool WrappedVulkan::Serialise_vkCmdResolveImage2KHR(SerialiserType &ser,
+                                                    VkCommandBuffer commandBuffer,
+                                                    const VkResolveImageInfo2KHR *pResolveImageInfo)
+{
+  SERIALISE_ELEMENT(commandBuffer);
+  SERIALISE_ELEMENT_LOCAL(ResolveInfo, *pResolveImageInfo);
+
+  Serialise_DebugMessages(ser);
+
+  SERIALISE_CHECK_READ_ERRORS();
+
+  if(IsReplayingAndReading())
+  {
+    VkResolveImageInfo2KHR unwrappedInfo = ResolveInfo;
+    unwrappedInfo.srcImage = Unwrap(unwrappedInfo.srcImage);
+    unwrappedInfo.dstImage = Unwrap(unwrappedInfo.dstImage);
+
+    byte *tempMem = GetTempMemory(GetNextPatchSize(unwrappedInfo.pNext));
+
+    UnwrapNextChain(m_State, "VkResolveImageInfo2KHR", tempMem, (VkBaseInStructure *)&unwrappedInfo);
+
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
+
+    if(IsActiveReplaying(m_State))
+    {
+      if(InRerecordRange(m_LastCmdBufferID))
+      {
+        commandBuffer = RerecordCmdBuf(m_LastCmdBufferID);
+
+        uint32_t eventId = HandlePreCallback(commandBuffer, DrawFlags::Resolve);
+
+        ObjDisp(commandBuffer)->CmdResolveImage2KHR(Unwrap(commandBuffer), &unwrappedInfo);
+
+        if(eventId && m_DrawcallCallback->PostMisc(eventId, DrawFlags::Resolve, commandBuffer))
+        {
+          ObjDisp(commandBuffer)->CmdResolveImage2KHR(Unwrap(commandBuffer), &unwrappedInfo);
+
+          m_DrawcallCallback->PostRemisc(eventId, DrawFlags::Resolve, commandBuffer);
+        }
+      }
+    }
+    else
+    {
+      ObjDisp(commandBuffer)->CmdResolveImage2KHR(Unwrap(commandBuffer), &unwrappedInfo);
+
+      {
+        AddEvent();
+
+        ResourceId srcid = GetResourceManager()->GetOriginalID(GetResID(ResolveInfo.srcImage));
+        ResourceId dstid = GetResourceManager()->GetOriginalID(GetResID(ResolveInfo.dstImage));
+
+        DrawcallDescription draw;
+        draw.name = StringFormat::Fmt("vkCmdResolveImage2KHR(%s, %s)", ToStr(srcid).c_str(),
+                                      ToStr(dstid).c_str());
+        draw.flags |= DrawFlags::Resolve;
+
+        draw.copySource = srcid;
+        draw.copySourceSubresource = Subresource();
+        draw.copyDestination = dstid;
+        draw.copyDestinationSubresource = Subresource();
+
+        AddDrawcall(draw, true);
+
+        VulkanDrawcallTreeNode &drawNode = GetDrawcallStack().back()->children.back();
+
+        if(srcid == dstid)
+        {
+          drawNode.resourceUsage.push_back(
+              make_rdcpair(GetResID(ResolveInfo.srcImage),
+                           EventUsage(drawNode.draw.eventId, ResourceUsage::Resolve)));
+        }
+        else
+        {
+          drawNode.resourceUsage.push_back(
+              make_rdcpair(GetResID(ResolveInfo.srcImage),
+                           EventUsage(drawNode.draw.eventId, ResourceUsage::ResolveSrc)));
+          drawNode.resourceUsage.push_back(
+              make_rdcpair(GetResID(ResolveInfo.dstImage),
+                           EventUsage(drawNode.draw.eventId, ResourceUsage::ResolveDst)));
+        }
+      }
+    }
+  }
+
+  return true;
+}
+
+void WrappedVulkan::vkCmdResolveImage2KHR(VkCommandBuffer commandBuffer,
+                                          const VkResolveImageInfo2KHR *pResolveImageInfo)
+{
+  SCOPED_DBG_SINK();
+
+  VkResolveImageInfo2KHR unwrappedInfo = *pResolveImageInfo;
+  unwrappedInfo.srcImage = Unwrap(unwrappedInfo.srcImage);
+  unwrappedInfo.dstImage = Unwrap(unwrappedInfo.dstImage);
+
+  byte *tempMem = GetTempMemory(GetNextPatchSize(unwrappedInfo.pNext));
+
+  UnwrapNextChain(m_State, "VkResolveImageInfo2KHR", tempMem, (VkBaseInStructure *)&unwrappedInfo);
+
+  SERIALISE_TIME_CALL(
+      ObjDisp(commandBuffer)->CmdResolveImage2KHR(Unwrap(commandBuffer), &unwrappedInfo));
+
+  if(IsCaptureMode(m_State))
+  {
+    VkResourceRecord *record = GetRecord(commandBuffer);
+
+    CACHE_THREAD_SERIALISER();
+
+    ser.SetDrawChunk();
+    SCOPED_SERIALISE_CHUNK(VulkanChunk::vkCmdResolveImage2KHR);
+    Serialise_vkCmdResolveImage2KHR(ser, commandBuffer, pResolveImageInfo);
+
+    record->AddChunk(scope.Get(&record->cmdInfo->alloc));
+
+    for(uint32_t i = 0; i < pResolveImageInfo->regionCount; i++)
+    {
+      const VkImageResolve2KHR &region = pResolveImageInfo->pRegions[i];
+
+      ImageRange srcRange(region.srcSubresource);
+      srcRange.offset = region.srcOffset;
+      srcRange.extent = region.extent;
+
+      ImageRange dstRange(region.dstSubresource);
+      dstRange.offset = region.dstOffset;
+      dstRange.extent = region.extent;
+
+      record->MarkImageFrameReferenced(GetRecord(pResolveImageInfo->srcImage), srcRange,
+                                       eFrameRef_Read);
+      record->MarkImageFrameReferenced(GetRecord(pResolveImageInfo->dstImage), dstRange,
+                                       eFrameRef_CompleteWrite);
+    }
   }
 }
 
@@ -3584,3 +4384,15 @@ INSTANTIATE_FUNCTION_SERIALISED(void, vkCmdDrawIndirectByteCountEXT, VkCommandBu
                                 uint32_t instanceCount, uint32_t firstInstance,
                                 VkBuffer counterBuffer, VkDeviceSize counterBufferOffset,
                                 uint32_t counterOffset, uint32_t vertexStride);
+INSTANTIATE_FUNCTION_SERIALISED(void, vkCmdCopyBuffer2KHR, VkCommandBuffer commandBuffer,
+                                const VkCopyBufferInfo2KHR *pCopyBufferInfo);
+INSTANTIATE_FUNCTION_SERIALISED(void, vkCmdCopyImage2KHR, VkCommandBuffer commandBuffer,
+                                const VkCopyImageInfo2KHR *pCopyImageInfo);
+INSTANTIATE_FUNCTION_SERIALISED(void, vkCmdCopyBufferToImage2KHR, VkCommandBuffer commandBuffer,
+                                const VkCopyBufferToImageInfo2KHR *pCopyBufferToImageInfo);
+INSTANTIATE_FUNCTION_SERIALISED(void, vkCmdCopyImageToBuffer2KHR, VkCommandBuffer commandBuffer,
+                                const VkCopyImageToBufferInfo2KHR *pCopyImageToBufferInfo);
+INSTANTIATE_FUNCTION_SERIALISED(void, vkCmdBlitImage2KHR, VkCommandBuffer commandBuffer,
+                                const VkBlitImageInfo2KHR *pBlitImageInfo);
+INSTANTIATE_FUNCTION_SERIALISED(void, vkCmdResolveImage2KHR, VkCommandBuffer commandBuffer,
+                                const VkResolveImageInfo2KHR *pResolveImageInfo);

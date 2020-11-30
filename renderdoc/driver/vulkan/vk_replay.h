@@ -225,7 +225,7 @@ struct ShaderDebugData
   VkPipelineLayout PipeLayout = VK_NULL_HANDLE;
   VkDescriptorSet DescSet = VK_NULL_HANDLE;
 
-  VkPipeline MathPipe = VK_NULL_HANDLE;
+  VkPipeline MathPipe[3] = {};
 
   VkImage Image = VK_NULL_HANDLE;
   VkImageView ImageView = VK_NULL_HANDLE;
@@ -236,10 +236,11 @@ struct ShaderDebugData
   VkDescriptorImageInfo DummyImageInfos[3][6] = {};
   VkWriteDescriptorSet DummyWrites[3][7] = {};
 
-  VkShaderModule Module[4] = {};
+  VkShaderModule Module[6] = {};
 
   std::map<uint32_t, VkPipeline> m_Pipelines;
 
+  GPUBuffer MathResult;
   GPUBuffer ConstantsBuffer;
   GPUBuffer ReadbackBuffer;
 };
@@ -376,7 +377,8 @@ public:
 
   rdcarray<PixelModification> PixelHistory(rdcarray<EventUsage> events, ResourceId target, uint32_t x,
                                            uint32_t y, const Subresource &sub, CompType typeCast);
-  ShaderDebugTrace *DebugVertex(uint32_t eventId, uint32_t vertid, uint32_t instid, uint32_t idx);
+  ShaderDebugTrace *DebugVertex(uint32_t eventId, uint32_t vertid, uint32_t instid, uint32_t idx,
+                                uint32_t view);
   ShaderDebugTrace *DebugPixel(uint32_t eventId, uint32_t x, uint32_t y, uint32_t sample,
                                uint32_t primitive);
   ShaderDebugTrace *DebugThread(uint32_t eventId, const uint32_t groupid[3],

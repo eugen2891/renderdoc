@@ -37,6 +37,7 @@
 #include "serialise/serialiser.h"
 #include "stb/stb_image_write.h"
 #include "strings/string_utils.h"
+#include "superluminal/superluminal.h"
 #include "crash_handler.h"
 
 #include "api/replay/renderdoc_tostr.inl"
@@ -133,7 +134,11 @@ rdcstr DoStringise(const PointerVal &el)
   }
 }
 
-BASIC_TYPE_SERIALISE_STRINGIFY(ResourceId, (uint64_t &)el, SDBasic::Resource, 8);
+template <class SerialiserType>
+void DoSerialise(SerialiserType &ser, ResourceId &el)
+{
+  ser.SerialiseValue(SDBasic::Resource, 8, (uint64_t &)el);
+}
 
 INSTANTIATE_SERIALISE_TYPE(ResourceId);
 
@@ -348,6 +353,10 @@ void RenderDoc::Initialise()
   Network::Init();
 
   Threading::Init();
+
+#if !RENDERDOC_STABLE_BUILD
+  Superluminal::Init();
+#endif
 
   m_RemoteIdent = 0;
   m_RemoteThread = 0;
@@ -1726,6 +1735,13 @@ void RenderDoc::FinishCaptureWriting(RDCFile *rdc, uint32_t frameNumber)
 
 void RenderDoc::AddChildProcess(uint32_t pid, uint32_t ident)
 {
+  if(ident == 0 || ident == m_RemoteIdent)
+  {
+    RDCERR("Child process %u returned invalid ident %u. Possibly too many listen sockets in use!",
+           pid, ident);
+    return;
+  }
+
   SCOPED_LOCK(m_ChildLock);
   m_Children.push_back(make_rdcpair(pid, ident));
 }

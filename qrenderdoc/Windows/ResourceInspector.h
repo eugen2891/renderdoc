@@ -36,6 +36,8 @@ class QCollatorSortFilterProxyModel;
 
 class RDTreeWidgetItem;
 class ResourceListItemModel;
+class StructuredDataItemModel;
+class RichTextViewDelegate;
 
 class ResourceInspector : public QFrame, public IResourceInspector, public ICaptureViewer
 {
@@ -49,6 +51,7 @@ public:
   QWidget *Widget() override { return this; }
   void Inspect(ResourceId id) override;
   ResourceId CurrentResource() override { return m_Resource; }
+  void RevealParameter(SDObject *param) override;
   // ICaptureViewer
   void OnCaptureLoaded() override;
   void OnCaptureClosed() override;
@@ -87,4 +90,6 @@ private:
   ResourceListItemModel *m_ResourceModel;
   int m_ResourceCacheID = -1;
   QCollatorSortFilterProxyModel *m_FilterModel;
+  StructuredDataItemModel *m_ChunksModel;
+  RichTextViewDelegate *m_delegate;
 };

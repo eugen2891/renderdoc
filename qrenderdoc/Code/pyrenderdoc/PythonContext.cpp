@@ -491,6 +491,17 @@ void PythonContext::Finish()
   PyGILState_Release(gil);
 }
 
+void PythonContext::PausePythonThreading()
+{
+  m_SavedThread = PyEval_SaveThread();
+}
+
+void PythonContext::ResumePythonThreading()
+{
+  PyEval_RestoreThread((PyThreadState *)m_SavedThread);
+  m_SavedThread = NULL;
+}
+
 void PythonContext::GlobalShutdown()
 {
   if(!initialised())
@@ -509,6 +520,22 @@ void PythonContext::GlobalShutdown()
   Py_Finalize();
 }
 
+QStringList PythonContext::GetApplicationExtensionsPaths()
+{
+  QStringList ret;
+
+  for(QString d : QStandardPaths::standardLocations(QStandardPaths::AppDataLocation))
+  {
+    QDir dir(d);
+    dir.cd(lit("extensions"));
+
+    if(dir.exists())
+      ret.append(dir.absolutePath());
+  }
+
+  return ret;
+}
+
 void PythonContext::ProcessExtensionWork(std::function<void()> callback)
 {
   PyGILState_STATE gil = PyGILState_Ensure();
@@ -524,18 +551,20 @@ bool PythonContext::LoadExtension(ICaptureContext &ctx, const rdcstr &extension)
 
   PyObject *syspath = PyObject_GetAttrString(sysobj, "path");
 
-  QString configPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-  QDir dir(configPath);
+  // add extensions directories in
+  for(QString p : PythonContext::GetApplicationExtensionsPaths())
+  {
+    QDir dir(p);
 
-  dir.cd(lit("extensions"));
+    rdcstr path = dir.absolutePath();
 
-  rdcstr path = dir.absolutePath();
-
-  PyObject *str = PyUnicode_FromString(path.c_str());
-
-  PyList_Append(syspath, str);
-
-  Py_DecRef(str);
+    if(dir.exists())
+    {
+      PyObject *str = PyUnicode_FromString(path.c_str());
+      PyList_Append(syspath, str);
+      Py_DecRef(str);
+    }
+  }
 
   PyObject *ext = NULL;
 
@@ -926,6 +955,9 @@ QWidget *PythonContext::QWidgetFromPy(PyObject *widget)
   if(!initialised())
     return NULL;
 
+  if(widget == Py_None || widget == NULL)
+    return NULL;
+
   if(!SbkPySide2_QtCoreTypes || !SbkPySide2_QtGuiTypes || !SbkPySide2_QtWidgetsTypes)
     return UnwrapBareQWidget(widget);
 
@@ -1021,6 +1053,11 @@ PyObject *PythonContext::QtObjectToPython(const char *typeName, QObject *object)
     if(w)
       return WrapBareQWidget(w);
 
+    Py_RETURN_NONE;
+  }
+
+  if(object == NULL)
+  {
     Py_RETURN_NONE;
   }
 

@@ -106,7 +106,7 @@ jobs:
         curl https://renderdoc.org/qrenderdoc_3rdparty.zip -O
         7z x qrenderdoc_3rdparty.zip
     - name: Set up Visual Studio tools
-      uses: microsoft/setup-msbuild@v1.0.0
+      uses: microsoft/setup-msbuild@v1.0.2
     - name: Building solution
       run: msbuild.exe renderdoc.sln "/p:Configuration=${{ matrix.configuration }}" "/p:Platform=${{ matrix.platform }}" "/p:PlatformToolset=${{ matrix.toolset }}"
       shell: powershell
@@ -226,8 +226,8 @@ jobs:
         wget -q http://dl.google.com/android/repository/android-ndk-r14b-linux-${ARCH}.zip
         unzip -u -q android-ndk-r14b-linux-${ARCH}.zip -d $GITHUB_WORKSPACE
         unzip -u -q sdk-tools-linux-3859397.zip -d $GITHUB_WORKSPACE
-        echo "::set-env name=ANDROID_NDK::$GITHUB_WORKSPACE/android-ndk-r14b"
-        echo "::set-env name=ANDROID_HOME::$GITHUB_WORKSPACE/"
+        echo "ANDROID_NDK=$GITHUB_WORKSPACE/android-ndk-r14b" >> $GITHUB_ENV
+        echo "ANDROID_HOME=$GITHUB_WORKSPACE/" >> $GITHUB_ENV
         
         # Answer "yes" to any license acceptance requests
         pushd $GITHUB_WORKSPACE/tools/bin
@@ -259,7 +259,7 @@ jobs:
         fetch-depth: 5
     - name: Install Homebrew dependencies
       run: |
-        brew update
+        brew update || true
         brew install qt5 lftp automake
         brew link qt5 --force
     - name: Build
@@ -292,7 +292,7 @@ jobs:
         FNAME="RenderDoc_macOS_"`git rev-parse HEAD`.zip
         zip -r "${FNAME}" build/bin
         ls -lh "${FNAME}"
-        echo "::set-env name=FNAME::$FNAME"
+        echo "FNAME=$FNAME" >> $GITHUB_ENV
     - if: matrix.type == 'Release' && github.event_name == 'push'
       name: Uploading artifacts for nightly build
       env:

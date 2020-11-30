@@ -123,7 +123,14 @@ ResourceInspector::ResourceInspector(ICaptureContext &ctx, QWidget *parent)
 
   ui->resourceList->setModel(m_FilterModel);
 
-  ui->initChunks->setColumns({lit("Parameter"), tr("Value")});
+  m_ChunksModel = new StructuredDataItemModel(this);
+  ui->initChunks->setModel(m_ChunksModel);
+  m_ChunksModel->setColumns({tr("Parameter"), tr("Value")},
+                            {StructuredDataItemModel::Name, StructuredDataItemModel::Value});
+
+  m_delegate = new RichTextViewDelegate(ui->initChunks);
+  ui->initChunks->setItemDelegate(m_delegate);
+
   ui->initChunks->header()->resizeSection(0, 200);
 
   ui->initChunks->setFont(Formatter::PreferredFont());
@@ -228,7 +235,6 @@ void ResourceInspector::Inspect(ResourceId id)
     ui->resetName->hide();
 
   ui->initChunks->setUpdatesEnabled(false);
-  ui->initChunks->clear();
   ui->resourceUsage->clear();
 
   const SDFile &file = m_Ctx.GetStructuredFile();
@@ -305,27 +311,17 @@ void ResourceInspector::Inspect(ResourceId id)
     }
     ui->relatedResources->endUpdate();
 
+    rdcarray<SDObject *> objs;
+
     for(uint32_t chunk : desc->initialisationChunks)
     {
-      RDTreeWidgetItem *root = new RDTreeWidgetItem({QString(), QString()});
-
       if(chunk < file.chunks.size())
-      {
-        SDChunk *chunkObj = file.chunks[chunk];
-
-        root->setText(0, chunkObj->name);
-
-        addStructuredObjects(root, chunkObj->data.children, false);
-      }
+        objs.push_back(file.chunks[chunk]);
       else
-      {
-        root->setText(1, tr("Invalid chunk index %1").arg(chunk));
-      }
-
-      ui->initChunks->addTopLevelItem(root);
-
-      ui->initChunks->setSelectedItem(root);
+        qCritical() << "Invalid chunk index" << chunk;
     }
+
+    m_ChunksModel->setObjects(objs);
   }
   else
   {
@@ -338,6 +334,58 @@ void ResourceInspector::Inspect(ResourceId id)
   if(m_Resource != ResourceId())
     ui->initChunks->applyExpansion(ui->initChunks->getInternalExpansion(qHash(ToQStr(m_Resource))),
                                    0);
+}
+
+void ResourceInspector::RevealParameter(SDObject *param)
+{
+  if(!param)
+    return;
+
+  rdcarray<SDObject *> hierarchy;
+  while(param)
+  {
+    hierarchy.push_back(param);
+    param = param->GetParent();
+  }
+
+  SDObject *current = hierarchy.back();
+  hierarchy.pop_back();
+
+  int rootIdx = m_ChunksModel->objects().indexOf(current);
+
+  if(rootIdx >= 0)
+  {
+    QModelIndex parent = m_ChunksModel->index(rootIdx, 0);
+
+    while(parent.isValid())
+    {
+      ui->initChunks->expand(parent);
+
+      SDObject *next = hierarchy.back();
+      hierarchy.pop_back();
+
+      QModelIndex item;
+
+      for(size_t i = 0; i < current->NumChildren(); i++)
+      {
+        if(current->GetChild(i) == next)
+        {
+          current = next;
+          item = parent.child((int)i, 0);
+          break;
+        }
+      }
+
+      parent = item;
+
+      if(hierarchy.empty())
+        break;
+    }
+
+    ui->initChunks->selectionModel()->select(
+        parent, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+    ui->initChunks->scrollTo(parent);
+  }
 }
 
 void ResourceInspector::OnCaptureLoaded()
@@ -373,7 +421,7 @@ void ResourceInspector::OnCaptureClosed()
 
   m_ResourceModel->reset();
 
-  ui->initChunks->clear();
+  m_ChunksModel->setObjects({});
   ui->initChunks->clearInternalExpansions();
   ui->relatedResources->clear();
   ui->resourceUsage->clear();
@@ -482,7 +530,7 @@ void ResourceInspector::on_viewContents_clicked()
       if(!m_Ctx.HasTextureViewer())
         m_Ctx.ShowTextureViewer();
       ITextureViewer *viewer = m_Ctx.GetTextureViewer();
-      viewer->ViewTexture(tex->resourceId, true);
+      viewer->ViewTexture(tex->resourceId, CompType::Typeless, true);
     }
   }
   else if(buf)

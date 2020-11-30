@@ -121,6 +121,7 @@
   <ItemGroup>
     <ClCompile Include="3rdparty\fmt\format.cc" />
     <ClCompile Include="d3d11\d3d11_1_many_uavs.cpp" />
+    <ClCompile Include="d3d11\d3d11_amd_shader_extensions.cpp" />
     <ClCompile Include="d3d11\d3d11_array_interpolator.cpp" />
     <ClCompile Include="d3d11\d3d11_binding_hazards.cpp" />
     <ClCompile Include="d3d11\d3d11_buffer_truncation.cpp" />
@@ -137,6 +138,7 @@
     <ClCompile Include="d3d11\d3d11_empty_compute_dispatch.cpp" />
     <ClCompile Include="d3d11\d3d11_empty_drawcall.cpp" />
     <ClCompile Include="d3d11\d3d11_empty_viewports.cpp" />
+    <ClCompile Include="d3d11\d3d11_feature_level_9.cpp" />
     <ClCompile Include="d3d11\d3d11_helpers.cpp" />
     <ClCompile Include="d3d11\d3d11_large_buffer.cpp" />
     <ClCompile Include="d3d11\d3d11_many_rtvs.cpp" />
@@ -180,6 +182,8 @@
     <ClCompile Include="d3d12\d3d12_existing_heap.cpp" />
     <ClCompile Include="d3d12\d3d12_helpers.cpp" />
     <ClCompile Include="d3d12\d3d12_large_buffer.cpp" />
+    <ClCompile Include="d3d12\d3d12_list_alloc_tests.cpp" />
+    <ClCompile Include="d3d12\d3d12_list_types.cpp" />
     <ClCompile Include="d3d12\d3d12_mesh_zoo.cpp" />
     <ClCompile Include="d3d12\d3d12_overlay_test.cpp" />
     <ClCompile Include="d3d12\d3d12_parameter_zoo.cpp" />
@@ -235,6 +239,7 @@
     <ClCompile Include="gl\gl_overlay_test.cpp" />
     <ClCompile Include="gl\gl_parameter_zoo.cpp" />
     <ClCompile Include="gl\gl_per_type_tex_units.cpp" />
+    <ClCompile Include="gl\gl_queries_in_use.cpp" />
     <ClCompile Include="gl\gl_resource_lifetimes.cpp" />
     <ClCompile Include="gl\gl_runtime_bind_prog_to_pipe.cpp" />
     <ClCompile Include="gl\gl_separable_geometry_shader.cpp" />
@@ -272,6 +277,7 @@
     <ClCompile Include="vk\vk_extended_dyn_state.cpp" />
     <ClCompile Include="vk\vk_khr_buffer_address.cpp" />
     <ClCompile Include="vk\vk_large_buffer.cpp" />
+    <ClCompile Include="vk\vk_large_descriptor_sets.cpp" />
     <ClCompile Include="vk\vk_mesh_zoo.cpp" />
     <ClCompile Include="vk\vk_parameter_zoo.cpp" />
     <ClCompile Include="vk\vk_imageless_framebuffer.cpp" />
@@ -316,6 +322,9 @@
     <ClCompile Include="win32\win32_window.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="3rdparty\ags\ags_shader_intrinsics_dx11.hlsl.h" />
+    <ClInclude Include="3rdparty\ags\ags_shader_intrinsics_dx12.hlsl.h" />
+    <ClInclude Include="3rdparty\ags\amd_ags.h" />
     <ClInclude Include="3rdparty\fmt\core.h" />
     <ClInclude Include="3rdparty\fmt\format-inl.h" />
     <ClInclude Include="3rdparty\fmt\format.h" />

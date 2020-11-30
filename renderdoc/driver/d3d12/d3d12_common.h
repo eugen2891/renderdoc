@@ -35,7 +35,7 @@
 
 // we need to use the most-derived native interface all over the place. To make things easier when
 // new versions come out we typedef it here when we don't need the specific interface
-using ID3D12GraphicsCommandListX = ID3D12GraphicsCommandList5;
+using ID3D12GraphicsCommandListX = ID3D12GraphicsCommandList6;
 
 // replay only class for handling marker regions
 struct D3D12MarkerRegion
@@ -180,10 +180,15 @@ public:
   // implement IUnknown
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppvObject)
   {
+    return QueryInterface("ID3D12Object", riid, ppvObject);
+  }
+
+  HRESULT STDMETHODCALLTYPE QueryInterface(const char *ifaceName, REFIID riid, void **ppvObject)
+  {
     if(!m_pReal)
       return E_NOINTERFACE;
 
-    return RefCountDXGIObject::WrapQueryInterface(m_pReal, riid, ppvObject);
+    return RefCountDXGIObject::WrapQueryInterface(m_pReal, ifaceName, riid, ppvObject);
   }
 
   ULONG STDMETHODCALLTYPE AddRef()
@@ -405,6 +410,7 @@ struct D3D12CommandSignature
   SERIALISE_INTERFACE(ID3D12GraphicsCommandList3); \
   SERIALISE_INTERFACE(ID3D12GraphicsCommandList4); \
   SERIALISE_INTERFACE(ID3D12GraphicsCommandList5); \
+  SERIALISE_INTERFACE(ID3D12GraphicsCommandList6); \
   SERIALISE_INTERFACE(ID3D12RootSignature);        \
   SERIALISE_INTERFACE(ID3D12Resource);             \
   SERIALISE_INTERFACE(ID3D12QueryHeap);            \
@@ -757,6 +763,8 @@ DECLARE_REFLECTION_STRUCT(D3D12_DESCRIPTOR_RANGE1);
 DECLARE_REFLECTION_STRUCT(D3D12_ROOT_DESCRIPTOR_TABLE1);
 DECLARE_REFLECTION_STRUCT(D3D12_ROOT_CONSTANTS);
 DECLARE_REFLECTION_STRUCT(D3D12_ROOT_DESCRIPTOR1);
+DECLARE_REFLECTION_STRUCT(D3D12_RESOURCE_DESC1);
+DECLARE_REFLECTION_STRUCT(D3D12_MIP_REGION);
 
 DECLARE_DESERIALISE_TYPE(D3D12_DISCARD_REGION);
 DECLARE_DESERIALISE_TYPE(D3D12_GRAPHICS_PIPELINE_STATE_DESC);
@@ -877,5 +885,8 @@ enum class D3D12Chunk : uint32_t
   List_ClearState,
   CompatDevice_CreateSharedResource,
   CompatDevice_CreateSharedHeap,
+  SetShaderExtUAV,
+  Device_CreateCommittedResource2,
+  Device_CreatePlacedResource1,
   Max,
 };

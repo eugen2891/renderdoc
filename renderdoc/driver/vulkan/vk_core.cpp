@@ -254,6 +254,7 @@ void WrappedVulkan::AddFreeCommandBuffer(VkCommandBuffer cmd)
 void WrappedVulkan::SubmitCmds(VkSemaphore *unwrappedWaitSemaphores,
                                VkPipelineStageFlags *waitStageMask, uint32_t waitSemaphoreCount)
 {
+  RENDERDOC_PROFILEFUNCTION();
   // nothing to do
   if(m_InternalCmds.pendingcmds.empty())
     return;
@@ -274,10 +275,13 @@ void WrappedVulkan::SubmitCmds(VkSemaphore *unwrappedWaitSemaphores,
       NULL,    // signal semaphores
   };
 
-  // we might have work to do (e.g. debug manager creation command buffer) but
-  // no queue, if the device is destroyed immediately. In this case we can just
-  // skip the submit
-  if(m_Queue != VK_NULL_HANDLE)
+  // we might have work to do (e.g. debug manager creation command buffer) but no queue, if the
+  // device is destroyed immediately. In this case we can just skip the submit. We don't mark these
+  // command buffers as submitted in case we're capturing an early frame - we can't lose these so we
+  // just defer them until later.
+  if(m_Queue == VK_NULL_HANDLE)
+    return;
+
   {
     VkResult vkr = ObjDisp(m_Queue)->QueueSubmit(Unwrap(m_Queue), 1, &submitInfo, VK_NULL_HANDLE);
     RDCASSERTEQUAL(vkr, VK_SUCCESS);
@@ -330,6 +334,7 @@ void WrappedVulkan::SubmitSemaphores()
 
 void WrappedVulkan::FlushQ()
 {
+  RENDERDOC_PROFILEFUNCTION();
   // VKTODOLOW could do away with the need for this function by keeping
   // commands until N presents later, or something, or checking on fences.
   // If we do so, then check each use for FlushQ to see if it needs a
@@ -841,6 +846,9 @@ static const VkExtensionProperties supportedExtensions[] = {
         VK_EXT_HOST_QUERY_RESET_EXTENSION_NAME, VK_EXT_HOST_QUERY_RESET_SPEC_VERSION,
     },
     {
+        VK_EXT_IMAGE_ROBUSTNESS_EXTENSION_NAME, VK_EXT_IMAGE_ROBUSTNESS_SPEC_VERSION,
+    },
+    {
         VK_EXT_INDEX_TYPE_UINT8_EXTENSION_NAME, VK_EXT_INDEX_TYPE_UINT8_SPEC_VERSION,
     },
     {
@@ -896,8 +904,14 @@ static const VkExtensionProperties supportedExtensions[] = {
         VK_EXT_SEPARATE_STENCIL_USAGE_EXTENSION_NAME, VK_EXT_SEPARATE_STENCIL_USAGE_SPEC_VERSION,
     },
     {
+        VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME, VK_EXT_SHADER_ATOMIC_FLOAT_SPEC_VERSION,
+    },
+    {
         VK_EXT_SHADER_DEMOTE_TO_HELPER_INVOCATION_EXTENSION_NAME,
         VK_EXT_SHADER_DEMOTE_TO_HELPER_INVOCATION_SPEC_VERSION,
+    },
+    {
+        VK_EXT_SHADER_IMAGE_ATOMIC_INT64_EXTENSION_NAME, VK_EXT_SHADER_IMAGE_ATOMIC_INT64_SPEC_VERSION,
     },
     {
         VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME, VK_EXT_SHADER_STENCIL_EXPORT_SPEC_VERSION,
@@ -986,6 +1000,9 @@ static const VkExtensionProperties supportedExtensions[] = {
     },
     {
         VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME, VK_KHR_BUFFER_DEVICE_ADDRESS_SPEC_VERSION,
+    },
+    {
+        VK_KHR_COPY_COMMANDS_2_EXTENSION_NAME, VK_KHR_COPY_COMMANDS_2_SPEC_VERSION,
     },
     {
         VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME, VK_KHR_CREATE_RENDERPASS_2_SPEC_VERSION,
@@ -1147,6 +1164,10 @@ static const VkExtensionProperties supportedExtensions[] = {
     {
         VK_KHR_SHADER_SUBGROUP_EXTENDED_TYPES_EXTENSION_NAME,
         VK_KHR_SHADER_SUBGROUP_EXTENDED_TYPES_SPEC_VERSION,
+    },
+    {
+        VK_KHR_SHADER_TERMINATE_INVOCATION_EXTENSION_NAME,
+        VK_KHR_SHADER_TERMINATE_INVOCATION_SPEC_VERSION,
     },
     {
         VK_KHR_SHARED_PRESENTABLE_IMAGE_EXTENSION_NAME, VK_KHR_SHARED_PRESENTABLE_IMAGE_SPEC_VERSION,
@@ -2027,10 +2048,15 @@ bool WrappedVulkan::EndFrameCapture(void *dev, void *wnd)
       // otherwise order must be preserved (vs. queue submits and desc set updates)
       for(size_t i = 0; i < m_CmdBufferRecords.size(); i++)
       {
+        RDCDEBUG("Adding chunks from command buffer %s",
+                 ToStr(m_CmdBufferRecords[i]->GetResourceID()).c_str());
+
+        size_t prevSize = recordlist.size();
+        (void)prevSize;
+
         m_CmdBufferRecords[i]->Insert(recordlist);
 
-        RDCDEBUG("Adding %u chunks to file serialiser from command buffer %s",
-                 (uint32_t)recordlist.size(), ToStr(m_CmdBufferRecords[i]->GetResourceID()).c_str());
+        RDCDEBUG("Added %zu chunks to file serialiser", recordlist.size() - prevSize);
       }
 
       m_FrameCaptureRecord->Insert(recordlist);
@@ -2375,6 +2401,9 @@ ReplayStatus WrappedVulkan::ReadLogInitialisation(RDCFile *rdc, bool storeStruct
 
       m_FrameReader = new StreamReader(reader, frameDataSize);
 
+      for(auto it = m_CreationInfo.m_Memory.begin(); it != m_CreationInfo.m_Memory.end(); ++it)
+        it->second.SimplifyBindings();
+
       ReplayStatus status = ContextReplayLog(m_State, 0, 0, false);
 
       if(status != ReplayStatus::Succeeded)
@@ -2444,9 +2473,6 @@ ReplayStatus WrappedVulkan::ReadLogInitialisation(RDCFile *rdc, bool storeStruct
   }
 
   FreeAllMemory(MemoryScope::IndirectReadback);
-
-  for(auto it = m_CreationInfo.m_Memory.begin(); it != m_CreationInfo.m_Memory.end(); ++it)
-    it->second.SimplifyBindings();
 
   return ReplayStatus::Succeeded;
 }
@@ -2676,6 +2702,7 @@ ReplayStatus WrappedVulkan::ContextReplayLog(CaptureState readType, uint32_t sta
 
 void WrappedVulkan::ApplyInitialContents()
 {
+  RENDERDOC_PROFILEFUNCTION();
   VkMarkerRegion region("ApplyInitialContents");
 
   // check that we have all external queues necessary
@@ -3213,6 +3240,19 @@ bool WrappedVulkan::ProcessChunk(ReadSerialiser &ser, VulkanChunk chunk)
       return Serialise_vkCmdSetStencilOpEXT(ser, VK_NULL_HANDLE, VK_STENCIL_FACE_FLAG_BITS_MAX_ENUM,
                                             VK_STENCIL_OP_MAX_ENUM, VK_STENCIL_OP_MAX_ENUM,
                                             VK_STENCIL_OP_MAX_ENUM, VK_COMPARE_OP_MAX_ENUM);
+
+    case VulkanChunk::vkCmdCopyBuffer2KHR:
+      return Serialise_vkCmdCopyBuffer2KHR(ser, VK_NULL_HANDLE, NULL);
+    case VulkanChunk::vkCmdCopyImage2KHR:
+      return Serialise_vkCmdCopyImage2KHR(ser, VK_NULL_HANDLE, NULL);
+    case VulkanChunk::vkCmdCopyBufferToImage2KHR:
+      return Serialise_vkCmdCopyBufferToImage2KHR(ser, VK_NULL_HANDLE, NULL);
+    case VulkanChunk::vkCmdCopyImageToBuffer2KHR:
+      return Serialise_vkCmdCopyImageToBuffer2KHR(ser, VK_NULL_HANDLE, NULL);
+    case VulkanChunk::vkCmdBlitImage2KHR:
+      return Serialise_vkCmdBlitImage2KHR(ser, VK_NULL_HANDLE, NULL);
+    case VulkanChunk::vkCmdResolveImage2KHR:
+      return Serialise_vkCmdResolveImage2KHR(ser, VK_NULL_HANDLE, NULL);
 
     // chunks that are reserved but not yet serialised
     case VulkanChunk::vkResetCommandPool:

@@ -63,7 +63,7 @@ struct xml_stream_writer : pugi::xml_writer
   void write(const void *data, size_t size) { stream.Write(data, size); }
 };
 
-static SDObject *makeSDObject(const char *name, SDBasic type, pugi::xml_node &value)
+static SDObject *makeSDObject(const rdcinflexiblestr &name, SDBasic type, pugi::xml_node &value)
 {
   switch(type)
   {
@@ -79,7 +79,7 @@ static SDObject *makeSDObject(const char *name, SDBasic type, pugi::xml_node &va
   return NULL;
 }
 
-static void saveSDObject(SDObject &value, pugi::xml_node obj)
+static void saveSDObject(const SDObject &value, pugi::xml_node obj)
 {
   switch(value.type.basetype)
   {
@@ -100,7 +100,7 @@ static void saveSDObject(SDObject &value, pugi::xml_node obj)
   }
 }
 
-static void Config2XML(pugi::xml_node &parent, SDObject &child)
+static void Config2XML(pugi::xml_node &parent, const SDObject &child)
 {
   pugi::xml_node obj = parent.append_child(child.name.c_str());
 
@@ -111,7 +111,7 @@ static void Config2XML(pugi::xml_node &parent, SDObject &child)
   }
   else
   {
-    SDObject *value = child.FindChild("value");
+    const SDObject *value = child.FindChild("value");
 
     parent.insert_child_before(pugi::node_comment, obj)
         .set_value((" " + child.FindChild("description")->data.str + " ").c_str());
@@ -119,13 +119,13 @@ static void Config2XML(pugi::xml_node &parent, SDObject &child)
     obj.append_attribute("type") = ToStr(value->type.basetype).c_str();
     if(value->type.basetype == SDBasic::Array)
     {
-      if(!value->data.children.empty())
-        obj.append_attribute("elemtype") = ToStr(value->data.children[0]->type.basetype).c_str();
+      if(value->NumChildren() > 0)
+        obj.append_attribute("elemtype") = ToStr(value->GetChild(0)->type.basetype).c_str();
       else
         obj.append_attribute("elemtype") = "";
 
-      for(size_t o = 0; o < value->data.children.size(); o++)
-        saveSDObject(*value->data.children[o], obj.append_child("item"));
+      for(size_t o = 0; o < value->NumChildren(); o++)
+        saveSDObject(*value->GetChild(o), obj.append_child("item"));
     }
     else
     {
@@ -136,7 +136,8 @@ static void Config2XML(pugi::xml_node &parent, SDObject &child)
 
 static SDObject *XML2Config(pugi::xml_node &obj)
 {
-  SDObject *ret = new SDObject(obj.name(), obj.attribute("type") ? "setting"_lit : "category"_lit);
+  SDObject *ret =
+      new SDObject(rdcstr(obj.name()), obj.attribute("type") ? "setting"_lit : "category"_lit);
 
   if(ret->type.name == "category"_lit)
   {
@@ -149,7 +150,7 @@ static SDObject *XML2Config(pugi::xml_node &obj)
       SDObject *childObj = XML2Config(child);
       if(childObj)
       {
-        ret->data.children.push_back(childObj);
+        ret->AddAndOwnChild(childObj);
       }
       else
       {
@@ -167,7 +168,7 @@ static SDObject *XML2Config(pugi::xml_node &obj)
     rdcstr description = obj.previous_sibling().value();
     description.trim();
 
-    ret->AddAndOwnChild(makeSDObject("description", description));
+    ret->AddAndOwnChild(makeSDObject("description"_lit, description));
 
     SDObject *valueObj = NULL;
 
@@ -185,16 +186,16 @@ static SDObject *XML2Config(pugi::xml_node &obj)
     if(type == SDBasic::Array)
     {
       type = types[basicTypeStrings.indexOf(obj.attribute("elemtype").as_string())];
-      valueObj = makeSDArray("value");
+      valueObj = makeSDArray("value"_lit);
 
       uint32_t i = 0;
       for(pugi::xml_node el = value.first_child(); el; el = el.next_sibling())
       {
-        SDObject *childObj = makeSDObject("$el", type, el);
+        SDObject *childObj = makeSDObject("$el"_lit, type, el);
 
         if(childObj)
         {
-          valueObj->data.children.push_back(childObj);
+          valueObj->AddAndOwnChild(childObj);
         }
         else
         {
@@ -209,7 +210,7 @@ static SDObject *XML2Config(pugi::xml_node &obj)
     }
     else
     {
-      valueObj = makeSDObject("value", type, value);
+      valueObj = makeSDObject("value"_lit, type, value);
 
       if(!valueObj)
       {
@@ -244,7 +245,7 @@ static SDObject *importXMLConfig(StreamReader &stream)
     {
       SDObject *childObj = XML2Config(child);
       if(childObj)
-        ret->data.children.push_back(XML2Config(child));
+        ret->AddAndOwnChild(XML2Config(child));
     }
   }
 
@@ -258,8 +259,8 @@ static void exportXMLConfig(StreamWriter &stream, const SDObject *obj)
   pugi::xml_node xRoot = doc.append_child("config");
   xRoot.append_attribute("version") = (uint32_t)1;
 
-  for(size_t o = 0; o < obj->data.children.size(); o++)
-    Config2XML(xRoot, *obj->data.children[o]);
+  for(size_t o = 0; o < obj->NumChildren(); o++)
+    Config2XML(xRoot, *obj->GetChild(o));
 
   xml_stream_writer writer(stream);
   doc.save(writer, "  ", pugi::format_default | pugi::format_no_empty_element_tags);
@@ -310,7 +311,7 @@ static bool MergeConfigValues(const rdcstr &prefix, SDObject *dstConfig, const S
                  oldVal.c_str(), newVal.c_str());
 
 #if RENDERDOC_STABLE_BUILD
-          if(dstDesc->data.str.contains(debugOnlyString))
+          if(rdcstr(dstDesc->data.str).contains(debugOnlyString))
           {
             RDCWARN("%s customisation will not apply - read only in this build",
                     (prefix + dstChild->name).c_str());
@@ -325,8 +326,8 @@ static bool MergeConfigValues(const rdcstr &prefix, SDObject *dstConfig, const S
 
           dstVal->DeleteChildren();
 
-          for(size_t c = 0; c < srcVal->data.children.size(); c++)
-            dstVal->data.children.push_back(srcVal->data.children[c]->Duplicate());
+          for(size_t c = 0; c < srcVal->NumChildren(); c++)
+            dstVal->DuplicateAndAddChild(srcVal->GetChild(c));
         }
 
         // if the description has changed from the loaded, need to write the new one
@@ -344,7 +345,7 @@ static bool MergeConfigValues(const rdcstr &prefix, SDObject *dstConfig, const S
       ret |= true;
 
       // if we're copying nodes, do that now
-      dstConfig->AddChild(srcChild->Duplicate());
+      dstConfig->DuplicateAndAddChild(srcChild->Duplicate());
     }
   }
 
@@ -372,8 +373,8 @@ const uint32_t &ConfigVarRegistration<uint32_t>::value()
 
 const rdcstr &ConfigVarRegistration<rdcstr>::value()
 {
-  (void)tmp;
-  return obj->data.str;
+  tmp = obj->data.str;
+  return tmp;
 }
 
 template <typename T>
@@ -385,9 +386,9 @@ rdcstr DefValString(const T &el)
 // this one needs a special implementation unfortunately to convert
 const rdcarray<rdcstr> &ConfigVarRegistration<rdcarray<rdcstr>>::value()
 {
-  tmp.resize(obj->data.children.size());
+  tmp.resize(obj->NumChildren());
   for(size_t i = 0; i < tmp.size(); i++)
-    tmp[i] = obj->data.children[i]->data.str;
+    tmp[i] = obj->GetChild(i)->data.str;
 
   return tmp;
 }
@@ -405,12 +406,12 @@ rdcstr DefValString(const rdcarray<rdcstr> &el)
   return ret;
 }
 
-inline SDObject *makeSDObject(const char *name, const rdcarray<rdcstr> &vals)
+inline SDObject *makeSDObject(const rdcinflexiblestr &name, const rdcarray<rdcstr> &vals)
 {
   SDObject *ret = new SDObject(name, "array"_lit);
   ret->type.basetype = SDBasic::Array;
   for(const rdcstr &s : vals)
-    ret->data.children.push_back(makeSDObject("$el", s));
+    ret->AddAndOwnChild(makeSDObject("$el"_lit, s));
   return ret;
 }
 
@@ -436,10 +437,10 @@ inline SDObject *makeSDObject(const char *name, const rdcarray<rdcstr> &vals)
     }                                                                                     \
                                                                                           \
     SDObject *setting = new SDObject(settingName, "setting"_lit);                         \
-    setting->AddAndOwnChild(makeSDObject("value", defaultValue));                         \
-    setting->AddAndOwnChild(makeSDObject("key", name));                                   \
-    setting->AddAndOwnChild(makeSDObject("default", defaultValue));                       \
-    setting->AddAndOwnChild(makeSDObject("description", desc.c_str()));                   \
+    setting->AddAndOwnChild(makeSDObject("value"_lit, defaultValue));                     \
+    setting->AddAndOwnChild(makeSDObject("key"_lit, name));                               \
+    setting->AddAndOwnChild(makeSDObject("default"_lit, defaultValue));                   \
+    setting->AddAndOwnChild(makeSDObject("description"_lit, desc));                       \
                                                                                           \
     obj = setting->GetChild(0);                                                           \
                                                                                           \
@@ -581,9 +582,9 @@ void RenderDoc::RegisterSetting(const rdcstr &settingPath, SDObject *setting)
     {
       child = new SDObject(node, "category"_lit);
       auto it =
-          std::lower_bound(cur->data.children.begin(), cur->data.children.end(), child,
+          std::lower_bound(cur->begin(), cur->end(), child,
                            [](const SDObject *a, const SDObject *b) { return a->name < b->name; });
-      cur->data.children.insert(it - cur->data.children.begin(), child);
+      cur->InsertAndOwnChild(it - cur->begin(), child);
     }
 
     cur = child;

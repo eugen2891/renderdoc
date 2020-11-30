@@ -86,6 +86,7 @@ class Serialiser
 public:
   static constexpr bool IsReading() { return sertype != SerialiserMode::Writing; }
   static constexpr bool IsWriting() { return sertype == SerialiserMode::Writing; }
+  bool IsStructurising() const { return m_Structuriser; }
   bool ExportStructure() const
   {
     // in debug builds, allow structured export during write for debugging. In release, only allow
@@ -116,7 +117,6 @@ public:
 
   bool IsErrored() { return IsReading() ? m_Read->IsErrored() : m_Write->IsErrored(); }
   void SetErrored() { IsReading() ? m_Read->SetErrored() : m_Write->SetErrored(); }
-  bool IsDummy() { return m_Dummy; }
   StreamWriter *GetWriter() { return m_Write; }
   StreamReader *GetReader() { return m_Read; }
   uint32_t GetChunkMetadataRecording() { return m_ChunkFlags; }
@@ -226,11 +226,9 @@ public:
 
       SDObject &current = *m_StructureStack.back();
 
-      current.data.basic.numChildren++;
-      current.data.children.push_back(new SDObject(name, TypeName<T>()));
-      m_StructureStack.push_back(current.data.children.back());
+      SDObject &obj = *current.AddAndOwnChild(new SDObject(name, TypeName<T>()));
+      m_StructureStack.push_back(&obj);
 
-      SDObject &obj = *m_StructureStack.back();
       obj.type.byteSize = sizeof(T);
       if(std::is_union<T>::value)
         obj.type.flags |= SDTypeFlags::Union;
@@ -273,11 +271,9 @@ public:
 
       SDObject &current = *m_StructureStack.back();
 
-      current.data.basic.numChildren++;
-      current.data.children.push_back(new SDObject(name, "Byte Buffer"_lit));
-      m_StructureStack.push_back(current.data.children.back());
+      SDObject &obj = *current.AddAndOwnChild(new SDObject(name, "Byte Buffer"_lit));
+      m_StructureStack.push_back(&obj);
 
-      SDObject &obj = *m_StructureStack.back();
       obj.type.basetype = SDBasic::Buffer;
       obj.type.byteSize = byteSize;
     }
@@ -304,7 +300,7 @@ public:
 // ScopedDeseralise* classes. We can verify with e.g. valgrind that there are no leaks, so to keep
 // the analysis non-spammy we just don't allocate for coverity builds
 #if !defined(__COVERITY__)
-        if(!m_Dummy && (flags & SerialiserFlags::AllocateMemory))
+        if(!m_Structuriser && (flags & SerialiserFlags::AllocateMemory))
         {
           if(byteSize > 0)
             el = AllocAlignedBuffer(byteSize);
@@ -384,11 +380,9 @@ public:
 
       SDObject &current = *m_StructureStack.back();
 
-      current.data.basic.numChildren++;
-      current.data.children.push_back(new SDObject(name, "Byte Buffer"_lit));
-      m_StructureStack.push_back(current.data.children.back());
+      SDObject &obj = *current.AddAndOwnChild(new SDObject(name, "Byte Buffer"_lit));
+      m_StructureStack.push_back(&obj);
 
-      SDObject &obj = *m_StructureStack.back();
       obj.type.basetype = SDBasic::Buffer;
       obj.type.byteSize = count;
     }
@@ -497,24 +491,20 @@ public:
       }
 
       SDObject &parent = *m_StructureStack.back();
-      parent.data.basic.numChildren++;
-      parent.data.children.push_back(new SDObject(name, TypeName<T>()));
-      m_StructureStack.push_back(parent.data.children.back());
 
-      SDObject &arr = *m_StructureStack.back();
+      SDObject &arr = *parent.AddAndOwnChild(new SDObject(name, TypeName<T>()));
+      m_StructureStack.push_back(&arr);
+
       arr.type.basetype = SDBasic::Array;
       arr.type.byteSize = N;
       arr.type.flags |= SDTypeFlags::FixedArray;
 
-      arr.data.basic.numChildren = (uint64_t)N;
-      arr.data.children.resize(N);
+      arr.ReserveChildren(N);
 
       for(size_t i = 0; i < N; i++)
       {
-        arr.data.children[i] = new SDObject("$el"_lit, TypeName<T>());
-        m_StructureStack.push_back(arr.data.children[i]);
-
-        SDObject &obj = *m_StructureStack.back();
+        SDObject &obj = *arr.AddAndOwnChild(new SDObject("$el"_lit, TypeName<T>()));
+        m_StructureStack.push_back(&obj);
 
         // default to struct. This will be overwritten if appropriate
         obj.type.basetype = SDBasic::Struct;
@@ -618,22 +608,20 @@ public:
       }
 
       SDObject &parent = *m_StructureStack.back();
-      parent.data.basic.numChildren++;
-      parent.data.children.push_back(new SDObject(name, TypeName<T>()));
-      m_StructureStack.push_back(parent.data.children.back());
 
-      SDObject &arr = *m_StructureStack.back();
+      SDObject &arr = *parent.AddAndOwnChild(new SDObject(name, TypeName<T>()));
+      m_StructureStack.push_back(&arr);
+
       arr.type.basetype = SDBasic::Array;
       arr.type.byteSize = arrayCount;
 
-      arr.data.basic.numChildren = arrayCount;
-      arr.data.children.resize((size_t)arrayCount);
+      arr.ReserveChildren((size_t)arrayCount);
 
 // Coverity is unable to tie this allocation together with the automatic scoped deallocation in the
 // ScopedDeseralise* classes. We can verify with e.g. valgrind that there are no leaks, so to keep
 // the analysis non-spammy we just don't allocate for coverity builds
 #if !defined(__COVERITY__)
-      if(IsReading() && !m_Dummy && (flags & SerialiserFlags::AllocateMemory))
+      if(IsReading() && !m_Structuriser && (flags & SerialiserFlags::AllocateMemory))
       {
         if(arrayCount > 0)
           el = new T[(size_t)arrayCount];
@@ -642,22 +630,34 @@ public:
       }
 #endif
 
-      for(uint64_t i = 0; el && i < arrayCount; i++)
+      if(m_LazyThreshold > 0 && arrayCount > m_LazyThreshold)
       {
-        arr.data.children[(size_t)i] = new SDObject("$el"_lit, TypeName<T>());
-        m_StructureStack.push_back(arr.data.children[(size_t)i]);
+        PushInternal();
 
-        SDObject &obj = *m_StructureStack.back();
+        for(uint64_t i = 0; el && i < arrayCount; i++)
+          SerialiseDispatch<Serialiser, T>::Do(*this, el[i]);
 
-        // default to struct. This will be overwritten if appropriate
-        obj.type.basetype = SDBasic::Struct;
-        obj.type.byteSize = sizeof(T);
-        if(std::is_union<T>::value)
-          obj.type.flags |= SDTypeFlags::Union;
+        PopInternal();
 
-        SerialiseDispatch<Serialiser, T>::Do(*this, el[i]);
+        arr.SetLazyArray(arrayCount, el, MakeLazySerialiser<T>());
+      }
+      else
+      {
+        for(uint64_t i = 0; el && i < arrayCount; i++)
+        {
+          SDObject &obj = *arr.AddAndOwnChild(new SDObject("$el"_lit, TypeName<T>()));
+          m_StructureStack.push_back(&obj);
 
-        m_StructureStack.pop_back();
+          // default to struct. This will be overwritten if appropriate
+          obj.type.basetype = SDBasic::Struct;
+          obj.type.byteSize = sizeof(T);
+          if(std::is_union<T>::value)
+            obj.type.flags |= SDTypeFlags::Union;
+
+          SerialiseDispatch<Serialiser, T>::Do(*this, el[i]);
+
+          m_StructureStack.pop_back();
+        }
       }
 
       m_StructureStack.pop_back();
@@ -668,7 +668,7 @@ public:
 // ScopedDeseralise* classes. We can verify with e.g. valgrind that there are no leaks, so to keep
 // the analysis non-spammy we just don't allocate for coverity builds
 #if !defined(__COVERITY__)
-      if(IsReading() && !m_Dummy && (flags & SerialiserFlags::AllocateMemory))
+      if(IsReading() && !m_Structuriser && (flags & SerialiserFlags::AllocateMemory))
       {
         if(arrayCount > 0)
           el = new T[(size_t)arrayCount];
@@ -711,34 +711,44 @@ public:
       }
 
       SDObject &parent = *m_StructureStack.back();
-      parent.data.basic.numChildren++;
-      parent.data.children.push_back(new SDObject(name, TypeName<U>()));
-      m_StructureStack.push_back(parent.data.children.back());
 
-      SDObject &arr = *m_StructureStack.back();
+      SDObject &arr = *parent.AddAndOwnChild(new SDObject(name, TypeName<U>()));
+      m_StructureStack.push_back(&arr);
+
       arr.type.basetype = SDBasic::Array;
       arr.type.byteSize = size;
 
-      arr.data.basic.numChildren = size;
-      arr.data.children.resize((size_t)size);
+      arr.ReserveChildren((size_t)size);
 
       if(IsReading())
         el.resize((int)size);
 
-      for(size_t i = 0; i < (size_t)size; i++)
+      if(m_LazyThreshold > 0 && size > m_LazyThreshold)
       {
-        arr.data.children[i] = new SDObject("$el"_lit, TypeName<U>());
-        m_StructureStack.push_back(arr.data.children[i]);
+        PushInternal();
 
-        SDObject &obj = *m_StructureStack.back();
+        for(size_t i = 0; i < (size_t)size; i++)
+          SerialiseDispatch<Serialiser, U>::Do(*this, el[i]);
 
-        // default to struct. This will be overwritten if appropriate
-        obj.type.basetype = SDBasic::Struct;
-        obj.type.byteSize = sizeof(U);
+        PopInternal();
 
-        SerialiseDispatch<Serialiser, U>::Do(*this, el[i]);
+        arr.SetLazyArray(size, el.data(), MakeLazySerialiser<U>());
+      }
+      else
+      {
+        for(size_t i = 0; i < (size_t)size; i++)
+        {
+          SDObject &obj = *arr.AddAndOwnChild(new SDObject("$el"_lit, TypeName<U>()));
+          m_StructureStack.push_back(&obj);
 
-        m_StructureStack.pop_back();
+          // default to struct. This will be overwritten if appropriate
+          obj.type.basetype = SDBasic::Struct;
+          obj.type.byteSize = sizeof(U);
+
+          SerialiseDispatch<Serialiser, U>::Do(*this, el[i]);
+
+          m_StructureStack.pop_back();
+        }
       }
 
       m_StructureStack.pop_back();
@@ -768,22 +778,18 @@ public:
       }
 
       SDObject &parent = *m_StructureStack.back();
-      parent.data.basic.numChildren++;
-      parent.data.children.push_back(new SDObject(name, "pair"_lit));
-      m_StructureStack.push_back(parent.data.children.back());
 
-      SDObject &arr = *m_StructureStack.back();
+      SDObject &arr = *parent.AddAndOwnChild(new SDObject(name, "pair"_lit));
+      m_StructureStack.push_back(&arr);
+
       arr.type.basetype = SDBasic::Struct;
       arr.type.byteSize = 2;
 
-      arr.data.basic.numChildren = 2;
-      arr.data.children.resize(2);
+      arr.ReserveChildren(2);
 
       {
-        arr.data.children[0] = new SDObject("first"_lit, TypeName<U>());
-        m_StructureStack.push_back(arr.data.children[0]);
-
-        SDObject &obj = *m_StructureStack.back();
+        SDObject &obj = *arr.AddAndOwnChild(new SDObject("first"_lit, TypeName<U>()));
+        m_StructureStack.push_back(&obj);
 
         // default to struct. This will be overwritten if appropriate
         obj.type.basetype = SDBasic::Struct;
@@ -795,10 +801,8 @@ public:
       }
 
       {
-        arr.data.children[1] = new SDObject("second"_lit, TypeName<V>());
-        m_StructureStack.push_back(arr.data.children[1]);
-
-        SDObject &obj = *m_StructureStack.back();
+        SDObject &obj = *arr.AddAndOwnChild(new SDObject("second"_lit, TypeName<V>()));
+        m_StructureStack.push_back(&obj);
 
         // default to struct. This will be overwritten if appropriate
         obj.type.basetype = SDBasic::Struct;
@@ -877,7 +881,7 @@ public:
 
         SDObject &parent = *m_StructureStack.back();
 
-        SDObject &nullable = *parent.data.children.back();
+        SDObject &nullable = *parent.GetChild(parent.NumChildren() - 1);
 
         nullable.type.flags |= SDTypeFlags::Nullable;
         if(std::is_union<T>::value)
@@ -886,10 +890,9 @@ public:
       else
       {
         SDObject &parent = *m_StructureStack.back();
-        parent.data.basic.numChildren++;
-        parent.data.children.push_back(new SDObject(name, TypeName<T>()));
 
-        SDObject &nullable = *parent.data.children.back();
+        SDObject &nullable = *parent.AddAndOwnChild(new SDObject(name, TypeName<T>()));
+
         nullable.type.basetype = SDBasic::Null;
         nullable.type.byteSize = 0;
         nullable.type.flags |= SDTypeFlags::Nullable;
@@ -974,11 +977,9 @@ public:
 
       SDObject &current = *m_StructureStack.back();
 
-      current.data.basic.numChildren++;
-      current.data.children.push_back(new SDObject(name.c_str(), "Byte Buffer"_lit));
-      m_StructureStack.push_back(current.data.children.back());
+      SDObject &obj = *current.AddAndOwnChild(new SDObject(name, "Byte Buffer"_lit));
+      m_StructureStack.push_back(&obj);
 
-      SDObject &obj = *m_StructureStack.back();
       obj.type.basetype = SDBasic::Buffer;
       obj.type.byteSize = totalSize;
 
@@ -1053,8 +1054,8 @@ public:
     {
       SDObject &current = *m_StructureStack.back();
 
-      if(!current.data.children.empty())
-        current.data.children.back()->type.flags |= SDTypeFlags::Hidden;
+      if(current.NumChildren() > 0)
+        current.GetChild(current.NumChildren() - 1)->type.flags |= SDTypeFlags::Hidden;
     }
 
     return *this;
@@ -1066,14 +1067,14 @@ public:
     {
       SDObject &current = *m_StructureStack.back();
 
-      if(!current.data.children.empty())
+      if(current.NumChildren() > 0)
       {
-        SDObject *last = current.data.children.back();
+        SDObject *last = current.GetChild(current.NumChildren() - 1);
         last->type.name = name;
 
         if(last->type.basetype == SDBasic::Array)
         {
-          for(SDObject *obj : last->data.children)
+          for(SDObject *obj : *last)
             obj->type.name = name;
         }
       }
@@ -1088,8 +1089,8 @@ public:
     {
       SDObject &current = *m_StructureStack.back();
 
-      if(!current.data.children.empty())
-        current.data.children.back()->name = name;
+      if(current.NumChildren() > 0)
+        current.GetChild(current.NumChildren() - 1)->name = name;
     }
 
     return *this;
@@ -1099,6 +1100,9 @@ public:
   // anything serialised while internal is set.
   void PushInternal() { m_InternalElement++; }
   void PopInternal() { m_InternalElement--; }
+  // this sets the current threshold for making structured data lazy for arrays above this size.
+  // If set to 0, structured data is never set as lazy
+  void SetLazyThreshold(uint32_t arraySize) { m_LazyThreshold = arraySize; }
   /////////////////////////////////////////////////////////////////////////////
 
   // for basic/leaf types. Read/written just as byte soup, MUST be plain old data
@@ -1200,6 +1204,22 @@ public:
     }
   }
 
+  void SerialiseValue(SDBasic type, size_t byteSize, rdcinflexiblestr &el)
+  {
+    if(IsReading())
+    {
+      rdcstr str;
+      SerialiseValue(type, byteSize, str);
+      el = str;
+    }
+    else
+    {
+      rdcstr str;
+      str = el;
+      SerialiseValue(type, byteSize, str);
+    }
+  }
+
   void SerialiseValue(SDBasic type, size_t byteSize, char *&el)
   {
     int32_t len = 0;
@@ -1250,7 +1270,10 @@ protected:
   Serialiser(StreamWriter *writer, Ownership own);
   Serialiser(StreamReader *reader, Ownership own, SDObject *rootStructuredObj);
 
-  void SetDummy(bool dummy) { m_Dummy = dummy; }
+  template <SerialiserMode othertype>
+  friend class Serialiser;
+
+  void SetStructuriser(bool s) { m_Structuriser = s; }
 private:
   static const uint64_t ChunkAlignment = 64;
   template <class SerialiserMode, typename T, bool isEnum = std::is_enum<T>::value>
@@ -1301,6 +1324,37 @@ private:
     }
   }
 
+  template <typename T>
+  LazyGenerator MakeLazySerialiser()
+  {
+    ChunkLookup lookup = m_ChunkLookup;
+    void *userData = m_pUserData;
+    bool buffers = m_ExportBuffers;
+    std::set<rdcstr> *stringDB = m_ExtStringDB;
+    return [lookup, userData, buffers, stringDB](const void *ptr) {
+      T &input = *(T *)ptr;
+      static StreamReader dummy(StreamReader::DummyStream);
+
+      SDObject *ret = new SDObject("$el"_lit, TypeName<T>());
+
+      ret->type.byteSize = sizeof(T);
+      if(std::is_union<T>::value)
+        ret->type.flags |= SDTypeFlags::Union;
+
+      Serialiser<SerialiserMode::Reading> ser(&dummy, Ownership::Nothing, ret);
+
+      ser.ConfigureStructuredExport(lookup, buffers, 0, 1.0);
+      ser.SetStreamingMode(true);
+      ser.SetStructuriser(true);
+      ser.SetUserData(userData);
+      ser.SetStringDatabase(stringDB);
+
+      SerialiseDispatch<Serialiser<SerialiserMode::Reading>, T>::Do(ser, input);
+
+      return ret;
+    };
+  }
+
   void *m_pUserData = NULL;
   uint64_t m_Version = 0;
 
@@ -1314,7 +1368,7 @@ private:
   // See SetStreamingMode
   bool m_DataStreaming = false;
   bool m_DrawChunk = false;
-  bool m_Dummy = false;
+  bool m_Structuriser = false;
 
   uint64_t m_LastChunkOffset = 0;
   uint64_t m_ChunkFixup = 0;
@@ -1322,6 +1376,7 @@ private:
   bool m_ExportStructured = false;
   bool m_ExportBuffers = false;
   int m_InternalElement = 0;
+  uint32_t m_LazyThreshold = 0;
   SDFile m_StructData;
   SDFile *m_StructuredFile = &m_StructData;
   rdcarray<SDObject *> m_StructureStack;
@@ -1382,7 +1437,7 @@ public:
   {
     ConfigureStructuredExport(lookup, false, 0, 1.0);
     SetStreamingMode(true);
-    SetDummy(true);
+    SetStructuriser(true);
   }
 };
 #endif
@@ -1452,20 +1507,57 @@ void DoSerialise(SerialiserType &ser, rdcstr &el)
   ser.SerialiseValue(SDBasic::String, 0, el);
 }
 
+template <>
+inline rdcliteral TypeName<rdcinflexiblestr>()
+{
+  return "string"_lit;
+}
+template <class SerialiserType>
+void DoSerialise(SerialiserType &ser, rdcinflexiblestr &el)
+{
+  ser.SerialiseValue(SDBasic::String, 0, el);
+}
+
 DECLARE_STRINGISE_TYPE(SDObject *);
 
 class ScopedChunk;
 
-class ChunkAllocator
+struct ChunkPage
+{
+  // compare just with the ID, so that old pages w hich have been reset in the pool don't get reset
+  // again if an allocator subsequently tries to free them
+  bool operator==(const ChunkPage &o) { return ID == o.ID; }
+  size_t ID;
+
+  // we allocate at two granularities, chunks are 16 bytes, buffers are multiples of 64-bytes
+  // to keep things simple we allocate the chunk memory as 16/64 = a quarter the size of the
+  // buffer memory. This will waste a bit of memory because we expect buffers to be on average
+  // larger than 64 bytes.
+
+  // base of the buffer
+  byte *bufferBase;
+  // head of the buffer
+  byte *bufferHead;
+
+  byte *chunkBase;
+  byte *chunkHead;
+};
+
+// this is the first level, it allocates whole pages and returns them to allocators for finer
+// grained allocation, and those allocators can return whole pages back. This is necessary because
+// when fine-grained resetting is allowed we need to associate whole pages with objects and if those
+// objects are allocating interleaved we need to immediately associate pages with them.
+class ChunkPagePool
 {
 public:
-  ChunkAllocator(size_t PageSize) : BufferPageSize(PageSize), ChunkPageSize(PageSize / 4) {}
-  ChunkAllocator(const ChunkAllocator &) = delete;
-  ChunkAllocator(ChunkAllocator &&) = delete;
-  ChunkAllocator &operator=(const ChunkAllocator &) = delete;
-  ~ChunkAllocator();
-  byte *AllocAlignedBuffer(uint64_t size);
-  byte *AllocChunk();
+  ChunkPagePool(size_t PageSize) : BufferPageSize(PageSize), ChunkPageSize(PageSize / 32) {}
+  ChunkPagePool(const ChunkPagePool &) = delete;
+  ChunkPagePool(ChunkPagePool &&) = delete;
+  ChunkPagePool &operator=(const ChunkPagePool &) = delete;
+  ~ChunkPagePool();
+
+  // Allocate a page
+  ChunkPage AllocPage();
 
   // really free any unused pages
   void Trim();
@@ -1474,59 +1566,64 @@ public:
   void Reset();
 
   // reset a page set, other pages will remain in use
-  void ResetPageSet(const rdcarray<uint32_t> &pages);
+  void ResetPageSet(const rdcarray<ChunkPage> &pages);
 
-  // get the pages that have been used since the last reset, or call to GetPageSet.
-  // these can then be freed later without affecting any other pages.
-  // note that not all pages will be full (e.g. even if only one 64-bit chunk is used in the last
-  // page it will be marked as full so it can be freed without another allocation overlapping).
-  rdcarray<uint32_t> GetPageSet();
-
+  size_t GetBufferPageSize() { return BufferPageSize; }
+  size_t GetChunkPageSize() { return ChunkPageSize; }
 private:
   size_t BufferPageSize;
   size_t ChunkPageSize;
 
-  struct Page
+  size_t m_ID = 1;
+
+  // a page is in precisely ONE of these arrays at any time.
+  // Reset() will move all allocated pages back to free pages and reclaim all that memory
+  // ResetPageSet() will move any referenced pages from allocatedPages back to freePages
+  rdcarray<ChunkPage> freePages;
+  rdcarray<ChunkPage> allocatedPages;
+};
+
+// this is the second level, it should only be used by one object (or a group of objects that are
+// always reset together). It pulls pages from the pool and allocates from them, and can then
+// release those pages back again with a reset operation.
+class ChunkAllocator
+{
+public:
+  ChunkAllocator(ChunkPagePool &pool) : m_Pool(pool) {}
+  ChunkAllocator(const ChunkAllocator &) = delete;
+  ChunkAllocator(ChunkAllocator &&) = delete;
+  ChunkAllocator &operator=(const ChunkAllocator &) = delete;
+  ~ChunkAllocator();
+
+  // swap with another chunk allocator - must be from the same pool
+  void swap(ChunkAllocator &alloc);
+
+  byte *AllocAlignedBuffer(uint64_t size);
+  byte *AllocChunk();
+
+  void Reset();
+
+private:
+  ChunkPagePool &m_Pool;
+
+  // as we're recording each new page we start gets added here. The last page is the one we're
+  // currently allocating from.
+  rdcarray<ChunkPage> pages;
+
+  // given a page and the known page size, how much is left
+  inline size_t GetRemainingBufferBytes(const ChunkPage &p)
   {
-    // this is an ID we can use to find this page in a pageset
-    uint32_t ID;
-
-    // we allocate at two granularities, chunks are 16 bytes, buffers are multiples of 64-bytes
-    // to keep things simple we allocate the chunk memory as 16/64 = a quarter the size of the
-    // buffer memory. This will waste a bit of memory because we expect buffers to be on average
-    // larger than 64 bytes.
-
-    // base of the buffer
-    byte *bufferBase;
-    // head of the buffer
-    byte *bufferHead;
-
-    byte *chunkBase;
-    byte *chunkHead;
-  };
-
-  // a page is in precisely ONE of these arrays at any time, either it's free (and the last free
-  // page may be partially used) or it's "full".
-  // Reset() will move all full pages back to free pages and reclaim all that memory
-  // ResetPageSet() will move any referenced pages from fullPages back to freePages
-  rdcarray<Page> freePages;
-  rdcarray<Page> fullPages;
-
-  // as we're recording each new page we start gets added here. If the user calls GetPageSet we
-  // return this and the user can then free it later without freeing all pages.
-  // note, the *current* page (freePages.back) isn't in this list, we only append to this list when
-  // we retire a full page. That means GetPageSet checks if the last page has been used at all and
-  // includes it there
-  rdcarray<uint32_t> usedPages;
-
-  size_t GetRemainingBufferBytes(const Page &p)
-  {
-    return BufferPageSize - (p.bufferHead - p.bufferBase);
+    return m_Pool.GetBufferPageSize() - (p.bufferHead - p.bufferBase);
   }
-  size_t GetRemainingChunkBytes(const Page &p)
+  inline size_t GetRemainingChunkBytes(const ChunkPage &p)
   {
-    return ChunkPageSize - (p.chunkHead - p.chunkBase);
+    return m_Pool.GetChunkPageSize() - (p.chunkHead - p.chunkBase);
   }
+  inline size_t GetRemainingBytes(bool chunkAlloc, const ChunkPage &p)
+  {
+    return chunkAlloc ? GetRemainingChunkBytes(p) : GetRemainingBufferBytes(p);
+  }
+
   byte *AllocateFromPages(bool chunkAlloc, size_t size);
 };
 
@@ -1537,8 +1634,7 @@ class Chunk
   Chunk(bool fromAllocator) : m_FromAllocator(fromAllocator) {}
   ~Chunk()
   {
-    if(!m_FromAllocator)
-      FreeAlignedBuffer(m_Data);
+    FreeAlignedBuffer(m_Data);
 
 #if ENABLED(RDOC_DEVEL)
     Atomic::Dec64(&m_LiveChunks);
@@ -1547,11 +1643,11 @@ class Chunk
   }
 
 public:
-  void Delete()
+  void Delete() { Delete(m_FromAllocator); }
+  bool IsFromAllocator() { return m_FromAllocator; }
+  void Delete(bool fromAllocator)
   {
-    if(m_FromAllocator)
-      this->~Chunk();
-    else
+    if(!fromAllocator)
       delete this;
   }
 

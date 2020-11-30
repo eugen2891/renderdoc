@@ -57,6 +57,7 @@
 #include "Windows/StatisticsViewer.h"
 #include "Windows/TextureViewer.h"
 #include "Windows/TimelineBar.h"
+#include "MiniQtHelper.h"
 #include "QRDUtils.h"
 #include "RGPInterop.h"
 #include "version.h"
@@ -65,6 +66,8 @@
 
 CaptureContext::CaptureContext(PersistantConfig &cfg) : m_Config(cfg)
 {
+  RENDERDOC_PROFILEFUNCTION();
+
   m_CaptureLoaded = false;
   m_LoadInProgress = false;
 
@@ -81,6 +84,8 @@ CaptureContext::CaptureContext(PersistantConfig &cfg) : m_Config(cfg)
   m_Drawcalls = &m_EmptyDraws;
 
   m_StructuredFile = &m_DummySDFile;
+
+  m_QtHelper = new MiniQtHelper(*this);
 
   qApp->setApplicationVersion(QString::fromLatin1(RENDERDOC_GetVersionString()));
 
@@ -112,6 +117,7 @@ CaptureContext::CaptureContext(PersistantConfig &cfg) : m_Config(cfg)
 
 CaptureContext::~CaptureContext()
 {
+  delete m_QtHelper;
   RENDERDOC_UnregisterMemoryRegion(this);
   delete m_Icon;
   m_Replay.CloseThread();
@@ -169,149 +175,151 @@ rdcstr CaptureContext::TempCaptureFilename(const rdcstr &appname)
 
 rdcarray<ExtensionMetadata> CaptureContext::GetInstalledExtensions()
 {
-  QString extensionFolder = configFilePath("extensions");
-
   rdcarray<ExtensionMetadata> ret;
 
-  QDirIterator it(extensionFolder, QDirIterator::Subdirectories);
-
-  while(it.hasNext())
+  for(QString extensionFolder : PythonContext::GetApplicationExtensionsPaths())
   {
-    QFileInfo fileinfo(it.next());
+    QDirIterator it(extensionFolder, QDirIterator::Subdirectories);
 
-    if(fileinfo.fileName().toLower() == lit("extension.json"))
+    while(it.hasNext())
     {
-      QFile f(fileinfo.absoluteFilePath());
+      QFileInfo fileinfo(it.next());
 
-      QString package = fileinfo.absolutePath()
-                            .replace(extensionFolder, QString())
-                            .replace(QLatin1Char('/'), QLatin1Char('.'));
-
-      while(package[0] == QLatin1Char('.'))
-        package.remove(0, 1);
-
-      while(package[package.size() - 1] == QLatin1Char('.'))
-        package.remove(package.size() - 1, 1);
-
-      if(f.exists() && f.open(QIODevice::ReadOnly | QIODevice::Text))
+      if(fileinfo.fileName().toLower() == lit("extension.json"))
       {
-        QVariantMap json = JSONToVariant(QString::fromUtf8(f.readAll()));
+        QFile f(fileinfo.absoluteFilePath());
 
-        if(json.empty())
-        {
-          qCritical() << fileinfo.absoluteFilePath() << "is corrupt, cannot parse json";
-          continue;
-        }
+        QString package = fileinfo.absolutePath()
+                              .replace(extensionFolder, QString())
+                              .replace(QLatin1Char('/'), QLatin1Char('.'));
 
-        ExtensionMetadata ext;
+        while(package[0] == QLatin1Char('.'))
+          package.remove(0, 1);
 
-        ext.package = package;
-        ext.filePath = fileinfo.absolutePath();
+        while(package[package.size() - 1] == QLatin1Char('.'))
+          package.remove(package.size() - 1, 1);
 
-        if(json.contains(lit("name")))
+        if(f.exists() && f.open(QIODevice::ReadOnly | QIODevice::Text))
         {
-          ext.name = json[lit("name")].toString();
-        }
-        else
-        {
-          qCritical() << "Extension" << package << "is corrupt, no name entry";
-          continue;
-        }
+          QVariantMap json = JSONToVariant(QString::fromUtf8(f.readAll()));
 
-        ext.extensionAPI = 1;
-        if(json.contains(lit("extension_api")))
-        {
-          ext.extensionAPI = json[lit("extension_api")].toInt();
-        }
-        else
-        {
-          qCritical() << "Extension" << QString(ext.name) << "is corrupt, no api version entry";
-          continue;
-        }
-
-        if(json.contains(lit("version")))
-        {
-          ext.version = json[lit("version")].toString();
-        }
-        else
-        {
-          qCritical() << "Extension" << QString(ext.name) << "is corrupt, no version entry";
-          continue;
-        }
-
-        if(json.contains(lit("description")))
-        {
-          ext.description = json[lit("description")].toString();
-        }
-        else
-        {
-          qCritical() << "Extension" << QString(ext.name) << "is corrupt, no description entry";
-          continue;
-        }
-
-        if(json.contains(lit("author")))
-        {
-          ext.author = json[lit("author")].toString();
-        }
-        else
-        {
-          qCritical() << "Extension" << QString(ext.name) << "is corrupt, no author entry";
-          continue;
-        }
-
-        if(json.contains(lit("url")))
-        {
-          ext.extensionURL = json[lit("url")].toString();
-        }
-        else
-        {
-          qCritical() << "Extension" << QString(ext.name) << "is corrupt, no URL entry";
-          continue;
-        }
-
-        if(json.contains(lit("minimum_renderdoc")))
-        {
-          QString minVer = json[lit("minimum_renderdoc")].toString();
-
-          QRegularExpression re(lit("([0-9]*).([0-9]*)"));
-          QRegularExpressionMatch match = re.match(minVer);
-
-          bool ok = false, badversion = false;
-
-          if(match.hasMatch())
+          if(json.empty())
           {
-            int major = match.captured(1).toInt(&ok);
+            qCritical() << fileinfo.absoluteFilePath() << "is corrupt, cannot parse json";
+            continue;
+          }
 
-            if(ok)
+          ExtensionMetadata ext;
+
+          ext.package = package;
+          ext.filePath = fileinfo.absolutePath();
+
+          if(json.contains(lit("name")))
+          {
+            ext.name = json[lit("name")].toString();
+          }
+          else
+          {
+            qCritical() << "Extension" << package << "is corrupt, no name entry";
+            continue;
+          }
+
+          ext.extensionAPI = 1;
+          if(json.contains(lit("extension_api")))
+          {
+            ext.extensionAPI = json[lit("extension_api")].toInt();
+          }
+          else
+          {
+            qCritical() << "Extension" << QString(ext.name) << "is corrupt, no api version entry";
+            continue;
+          }
+
+          if(json.contains(lit("version")))
+          {
+            ext.version = json[lit("version")].toString();
+          }
+          else
+          {
+            qCritical() << "Extension" << QString(ext.name) << "is corrupt, no version entry";
+            continue;
+          }
+
+          if(json.contains(lit("description")))
+          {
+            ext.description = json[lit("description")].toString();
+          }
+          else
+          {
+            qCritical() << "Extension" << QString(ext.name) << "is corrupt, no description entry";
+            continue;
+          }
+
+          if(json.contains(lit("author")))
+          {
+            ext.author = json[lit("author")].toString();
+          }
+          else
+          {
+            qCritical() << "Extension" << QString(ext.name) << "is corrupt, no author entry";
+            continue;
+          }
+
+          if(json.contains(lit("url")))
+          {
+            ext.extensionURL = json[lit("url")].toString();
+          }
+          else
+          {
+            qCritical() << "Extension" << QString(ext.name) << "is corrupt, no URL entry";
+            continue;
+          }
+
+          if(json.contains(lit("minimum_renderdoc")))
+          {
+            QString minVer = json[lit("minimum_renderdoc")].toString();
+
+            QRegularExpression re(lit("([0-9]*).([0-9]*)"));
+            QRegularExpressionMatch match = re.match(minVer);
+
+            bool ok = false, badversion = false;
+
+            if(match.hasMatch())
             {
-              int minor = match.captured(2).toInt(&ok);
+              int major = match.captured(1).toInt(&ok);
 
-              // if it needs a higher major version, we can't load it
-              if(major > RENDERDOC_VERSION_MAJOR)
-                badversion = true;
+              if(ok)
+              {
+                int minor = match.captured(2).toInt(&ok);
 
-              // if major versions are the same and it needs a higher minor, we can't load it either
-              if(major == RENDERDOC_VERSION_MAJOR && minor > RENDERDOC_VERSION_MINOR)
-                badversion = true;
+                // if it needs a higher major version, we can't load it
+                if(major > RENDERDOC_VERSION_MAJOR)
+                  badversion = true;
+
+                // if major versions are the same and it needs a higher minor, we can't load it
+                // either
+                if(major == RENDERDOC_VERSION_MAJOR && minor > RENDERDOC_VERSION_MINOR)
+                  badversion = true;
+              }
+            }
+
+            if(!ok)
+            {
+              qCritical() << "Extension" << QString(ext.name)
+                          << "is corrupt, minimum_renderdoc doesn't match a MAJOR.MINOR version";
+              continue;
+            }
+
+            if(badversion)
+            {
+              qInfo() << "Extension" << QString(ext.name) << "declares minimum_renderdoc" << minVer
+                      << "so skipping";
+              continue;
             }
           }
 
-          if(!ok)
-          {
-            qCritical() << "Extension" << QString(ext.name)
-                        << "is corrupt, minimum_renderdoc doesn't match a MAJOR.MINOR version";
-            continue;
-          }
-
-          if(badversion)
-          {
-            qInfo() << "Extension" << QString(ext.name) << "declares minimum_renderdoc" << minVer
-                    << "so skipping";
-            continue;
-          }
+          ret.push_back(ext);
         }
-
-        ret.push_back(ext);
       }
     }
   }
@@ -502,6 +510,11 @@ void CaptureContext::MenuDisplaying(PanelMenu panelMenu, QMenu *menu, QWidget *e
   }
 }
 
+IMiniQtHelper &CaptureContext::GetMiniQtHelper()
+{
+  return *m_QtHelper;
+}
+
 void CaptureContext::MessageDialog(const rdcstr &text, const rdcstr &title)
 {
   RDDialog::information(m_MainWindow, title, text);
@@ -688,6 +701,8 @@ void CaptureContext::CleanMenu(QAction *action)
 void CaptureContext::LoadCapture(const rdcstr &captureFile, const ReplayOptions &opts,
                                  const rdcstr &origFilename, bool temporary, bool local)
 {
+  RENDERDOC_PROFILEFUNCTION();
+
   CloseCapture();
 
   PointerTypeRegistry::Init();
@@ -978,6 +993,16 @@ void CaptureContext::LoadCaptureThreaded(const QString &captureFile, const Repla
       bytebuf buf = access->GetSectionContents(idx);
       LoadNotes(QString::fromUtf8((const char *)buf.data(), buf.count()));
     }
+
+    idx = access->FindSectionByType(SectionType::EditedShaders);
+    if(idx >= 0)
+    {
+      bytebuf buf = access->GetSectionContents(idx);
+      GUIInvoke::call(m_MainWindow, [this, buf]() {
+        LoadEdits(QString::fromUtf8((const char *)buf.data(), buf.count()));
+      });
+    }
+
     QString driver = access->DriverName();
     if(driver == lit("Image"))
     {
@@ -1290,7 +1315,7 @@ void CaptureContext::CloseCapture()
 
   for(ICaptureViewer *viewer : capviewers)
   {
-    if(viewer)
+    if(viewer && m_CaptureViewers.contains(viewer))
       viewer->OnCaptureClosed();
   }
 
@@ -1437,6 +1462,17 @@ void CaptureContext::ExportCapture(const CaptureFileFormat &fmt, const rdcstr &e
 void CaptureContext::SetEventID(const rdcarray<ICaptureViewer *> &exclude, uint32_t selectedEventID,
                                 uint32_t eventId, bool force)
 {
+  RENDERDOC_PROFILEFUNCTION();
+
+  if(!IsCaptureLoaded())
+    return;
+
+  if(eventId > m_LastDrawcall->eventId)
+  {
+    qCritical() << "Invalid EID being selected " << eventId;
+    return;
+  }
+
   uint32_t prevSelectedEventID = m_SelectedEventID;
   m_SelectedEventID = selectedEventID;
   uint32_t prevEventID = m_EventID;
@@ -1478,6 +1514,11 @@ void CaptureContext::ConnectToRemoteServer(RemoteHost host)
 void CaptureContext::SetRemoteHost(int hostIdx)
 {
   m_MainWindow->setRemoteHost(hostIdx);
+}
+
+bool CaptureContext::IsResourceReplaced(ResourceId id)
+{
+  return m_ReplacedResources.contains(id);
 }
 
 void CaptureContext::RegisterReplacement(ResourceId id)
@@ -1543,8 +1584,7 @@ void CaptureContext::SetNotes(const rdcstr &key, const rdcstr &contents)
 
   m_Notes[key] = contents;
 
-  m_CaptureMods |= CaptureModifications::Notes;
-  m_MainWindow->captureModified();
+  SetModification(CaptureModifications::Notes);
 
   RefreshUIStatus({}, true, true);
 }
@@ -1567,8 +1607,7 @@ void CaptureContext::SetBookmark(const EventBookmark &mark)
     m_Bookmarks.push_back(mark);
   }
 
-  m_CaptureMods |= CaptureModifications::Bookmarks;
-  m_MainWindow->captureModified();
+  SetModification(CaptureModifications::Bookmarks);
 
   RefreshUIStatus({}, true, true);
 }
@@ -1577,10 +1616,15 @@ void CaptureContext::RemoveBookmark(uint32_t EID)
 {
   m_Bookmarks.removeOne(EventBookmark(EID));
 
-  m_CaptureMods |= CaptureModifications::Bookmarks;
-  m_MainWindow->captureModified();
+  SetModification(CaptureModifications::Bookmarks);
 
   RefreshUIStatus({}, true, true);
+}
+
+void CaptureContext::SetModification(CaptureModifications mod)
+{
+  m_CaptureMods |= mod;
+  m_MainWindow->captureModified();
 }
 
 void CaptureContext::SaveChanges()
@@ -1595,6 +1639,9 @@ void CaptureContext::SaveChanges()
 
   if(m_CaptureMods & CaptureModifications::Notes)
     success &= SaveNotes();
+
+  if(m_CaptureMods & CaptureModifications::EditedShaders)
+    success &= SaveEdits();
 
   if(!success)
   {
@@ -1726,6 +1773,66 @@ void CaptureContext::LoadNotes(const QString &data)
   {
     if(!key.isEmpty())
       m_Notes[key] = root[key].toString();
+  }
+}
+
+bool CaptureContext::SaveEdits()
+{
+  // make sure this format matches SetCaptureFileComments in app_api.cpp if it changes
+  QVariantList editors;
+
+  for(ShaderViewer *e : m_ShaderEditors)
+  {
+    QVariantMap editor = e->SaveEditor();
+    if(!editor.isEmpty())
+      editors.push_back(e->SaveEditor());
+  }
+
+  QVariantMap root;
+  root[lit("editors")] = editors;
+
+  QString json = VariantToJSON(root);
+
+  SectionProperties props;
+  props.type = SectionType::EditedShaders;
+  props.version = 1;
+
+  return Replay().GetCaptureAccess()->WriteSection(props, json.toUtf8());
+}
+
+void CaptureContext::LoadEdits(const QString &data)
+{
+  QVariantMap root = JSONToVariant(data);
+
+  QVariantList editors = root[lit("editors")].toList();
+
+  auto replaceSaveCallback = [this](ICaptureContext *ctx, IShaderViewer *viewer, ResourceId id,
+                                    ShaderStage stage, ShaderEncoding shaderEncoding,
+                                    ShaderCompileFlags flags, rdcstr entryFunc, bytebuf shaderBytes) {
+
+    ApplyShaderEdit(viewer, id, stage, shaderEncoding, flags, entryFunc, shaderBytes);
+  };
+
+  auto replaceCloseCallback = [this](ICaptureContext *ctx, IShaderViewer *view, ResourceId id) {
+    RevertShaderEdit(view, id);
+  };
+
+  for(QVariant e : editors)
+  {
+    ShaderViewer *edit =
+        ShaderViewer::LoadEditor(*this, e.toMap(), replaceSaveCallback, replaceCloseCallback,
+                                 [this](ShaderViewer *view, bool closed) {
+                                   SetModification(CaptureModifications::EditedShaders);
+                                   if(closed)
+                                     m_ShaderEditors.removeOne(view);
+                                 },
+                                 m_MainWindow->Widget());
+
+    if(edit)
+    {
+      AddDockWindow(edit->Widget(), DockReference::MainToolArea, NULL);
+      m_ShaderEditors.push_back(edit);
+    }
   }
 }
 
@@ -1866,8 +1973,7 @@ void CaptureContext::SetResourceCustomName(ResourceId id, const rdcstr &name)
     m_CustomNames[id] = name;
   }
 
-  m_CaptureMods |= CaptureModifications::Renames;
-  m_MainWindow->captureModified();
+  SetModification(CaptureModifications::Renames);
 
   CacheResources();
 
@@ -2195,8 +2301,100 @@ IShaderViewer *CaptureContext::EditShader(ResourceId id, ShaderStage stage,
                                           IShaderViewer::SaveCallback saveCallback,
                                           IShaderViewer::CloseCallback closeCallback)
 {
-  return ShaderViewer::EditShader(*this, id, stage, entryPoint, files, shaderEncoding, flags,
-                                  saveCallback, closeCallback, m_MainWindow->Widget());
+  ShaderViewer *viewer = NULL;
+
+  if(id != ResourceId())
+  {
+    auto replaceSaveCallback = [this, saveCallback](
+        ICaptureContext *ctx, IShaderViewer *viewer, ResourceId id, ShaderStage stage,
+        ShaderEncoding shaderEncoding, ShaderCompileFlags flags, rdcstr entryFunc,
+        bytebuf shaderBytes) {
+
+      ApplyShaderEdit(viewer, id, stage, shaderEncoding, flags, entryFunc, shaderBytes);
+
+      if(saveCallback)
+        saveCallback(ctx, viewer, id, stage, shaderEncoding, flags, entryFunc, shaderBytes);
+    };
+
+    auto replaceCloseCallback = [this, closeCallback](ICaptureContext *ctx, IShaderViewer *view,
+                                                      ResourceId id) {
+      RevertShaderEdit(view, id);
+
+      if(closeCallback)
+        closeCallback(ctx, view, id);
+    };
+
+    viewer = ShaderViewer::EditShader(*this, id, stage, entryPoint, files, shaderEncoding, flags,
+                                      replaceSaveCallback, replaceCloseCallback,
+                                      [this](ShaderViewer *view, bool closed) {
+                                        SetModification(CaptureModifications::EditedShaders);
+                                        if(closed)
+                                          m_ShaderEditors.removeOne(view);
+                                      },
+                                      m_MainWindow->Widget());
+
+    m_ShaderEditors.push_back(viewer);
+    SetModification(CaptureModifications::EditedShaders);
+  }
+  else
+  {
+    viewer = ShaderViewer::EditShader(*this, id, stage, entryPoint, files, shaderEncoding, flags,
+                                      saveCallback, closeCallback, NULL, m_MainWindow->Widget());
+  }
+
+  return viewer;
+}
+
+void CaptureContext::ApplyShaderEdit(IShaderViewer *viewer, ResourceId id, ShaderStage stage,
+                                     ShaderEncoding shaderEncoding, ShaderCompileFlags flags,
+                                     const rdcstr &entryFunc, const bytebuf &shaderBytes)
+{
+  if(shaderBytes.isEmpty())
+    return;
+
+  ANALYTIC_SET(UIFeatures.ShaderEditing, true);
+
+  QPointer<QObject> ptr(viewer->Widget());
+
+  // invoke off to the ReplayController to replace the capture's shader
+  // with our edited one
+  Replay().AsyncInvoke([this, entryFunc, shaderBytes, shaderEncoding, flags, stage, id, ptr,
+                        viewer](IReplayController *r) {
+    rdcstr errs;
+
+    ResourceId from = id;
+    ResourceId to;
+
+    rdctie(to, errs) =
+        r->BuildTargetShader(entryFunc.c_str(), shaderEncoding, shaderBytes, flags, stage);
+
+    if(to == ResourceId())
+    {
+      r->RemoveReplacement(from);
+
+      // this GUIInvoke call always needs to go through even if the viewer has been closed.
+      GUIInvoke::call(GetMainWindow()->Widget(), [this, from]() { UnregisterReplacement(from); });
+    }
+    else
+    {
+      r->ReplaceResource(from, to);
+
+      GUIInvoke::call(GetMainWindow()->Widget(), [this, from]() { RegisterReplacement(from); });
+    }
+    if(ptr)
+      GUIInvoke::call(ptr, [viewer, errs]() { viewer->ShowErrors(errs); });
+  });
+}
+
+void CaptureContext::RevertShaderEdit(IShaderViewer *viewer, ResourceId id)
+{
+  // remove the replacement on close (we could make this more sophisticated if there
+  // was a place to control replaced resources/shaders).
+  Replay().AsyncInvoke([this, id](IReplayController *r) {
+    if(IsCaptureLoaded())
+      r->RemoveReplacement(id);
+    GUIInvoke::call(GetMainWindow()->Widget(), [this, id] { UnregisterReplacement(id); });
+  });
 }
 
 IShaderViewer *CaptureContext::DebugShader(const ShaderBindpointMapping *bind,

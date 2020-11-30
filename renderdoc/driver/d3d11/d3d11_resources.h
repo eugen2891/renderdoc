@@ -316,7 +316,7 @@ public:
       return S_OK;
     }
 
-    return RefCountDXGIObject::WrapQueryInterface(m_pReal, riid, ppvObject);
+    return RefCountDXGIObject::WrapQueryInterface(m_pReal, "ID3D11DeviceChild", riid, ppvObject);
   }
 
   //////////////////////////////
@@ -988,11 +988,14 @@ public:
     }
 
     void SetDebugInfoPath(const rdcstr &path) { m_DebugInfoPath = path; }
+    void SetShaderExtSlot(uint32_t slot) { m_ShaderExtSlot = slot; }
+    uint32_t GetShaderExtSlot() { return m_ShaderExtSlot; }
     DXBC::DXBCContainer *GetDXBC()
     {
       if(m_DXBCFile == NULL && !m_Bytecode.empty())
       {
-        m_DXBCFile = new DXBC::DXBCContainer(m_Bytecode, m_DebugInfoPath);
+        m_DXBCFile = new DXBC::DXBCContainer(m_Bytecode, m_DebugInfoPath, GraphicsAPI::D3D11,
+                                             m_ShaderExtSlot, ~0U);
         m_Bytecode.clear();
       }
       return m_DXBCFile;
@@ -1024,6 +1027,7 @@ public:
     ResourceId m_ID;
 
     rdcstr m_DebugInfoPath;
+    uint32_t m_ShaderExtSlot = ~0U;
 
     bytebuf m_Bytecode;
 
@@ -1058,6 +1062,16 @@ public:
     }
   }
 
+  void SetShaderExtSlot(uint32_t slot)
+  {
+    SCOPED_LOCK(m_ShaderListLock);
+    m_ShaderList[m_ID]->SetShaderExtSlot(slot);
+  }
+  uint32_t GetShaderExtSlot()
+  {
+    SCOPED_LOCK(m_ShaderListLock);
+    return m_ShaderList[m_ID]->GetShaderExtSlot();
+  }
   DXBC::DXBCContainer *GetDXBC()
   {
     SCOPED_LOCK(m_ShaderListLock);

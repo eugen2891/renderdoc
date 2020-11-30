@@ -836,11 +836,13 @@ bucket when the pixel values are divided between ``minval`` and ``maxval``.
 :param int instid: The instance ID as a 0-based index up to the number of instances in the draw.
 :param int idx: The actual index used to look up vertex inputs, either from the vertex ID for non-
   indexed draws or drawn from the index buffer. This must have all drawcall offsets applied.
+:param int view: The index of the multiview viewport to use, or 0 if multiview is not in use.
 :return: The resulting trace resulting from debugging. Destroy with
   :meth:`FreeTrace`.
 :rtype: ShaderDebugTrace
 )");
-  virtual ShaderDebugTrace *DebugVertex(uint32_t vertid, uint32_t instid, uint32_t idx) = 0;
+  virtual ShaderDebugTrace *DebugVertex(uint32_t vertid, uint32_t instid, uint32_t idx,
+                                        uint32_t view) = 0;
 
   DOCUMENT(R"(Retrieve a debugging trace from running a pixel shader.
 
@@ -2173,3 +2175,37 @@ extern "C" RENDERDOC_API int RENDERDOC_CC RENDERDOC_RunUnitTests(const rdcstr &c
 DOCUMENT("Internal function that runs functional tests.");
 extern "C" RENDERDOC_API int RENDERDOC_CC RENDERDOC_RunFunctionalTests(int pythonMinorVersion,
                                                                        const rdcarray<rdcstr> &args);
+
+#if !defined(SWIG)
+#include "version.h"
+
+DOCUMENT("Internal function that begins a profile region.");
+extern "C" RENDERDOC_API void RENDERDOC_CC RENDERDOC_BeginProfileRegion(const rdcstr &name);
+
+DOCUMENT("Internal function that ends a profile region.");
+extern "C" RENDERDOC_API void RENDERDOC_CC RENDERDOC_EndProfileRegion();
+
+// don't define profile regions in stable builds
+#if RENDERDOC_STABLE_BUILD
+
+#define RENDERDOC_PROFILEREGION(name)
+
+#else
+
+struct RENDERDOC_ProfileRegion
+{
+  RENDERDOC_ProfileRegion(const rdcstr &name) { RENDERDOC_BeginProfileRegion(name); }
+  ~RENDERDOC_ProfileRegion() { RENDERDOC_EndProfileRegion(); }
+};
+
+#define RENDERDOC_PROFILEREGION(name) RENDERDOC_ProfileRegion profile##__LINE__(name);
+
+#endif
+
+#if defined(RENDERDOC_PLATFORM_WIN32)
+#define RENDERDOC_PROFILEFUNCTION() RENDERDOC_PROFILEREGION(__FUNCSIG__);
+#else
+#define RENDERDOC_PROFILEFUNCTION() RENDERDOC_PROFILEREGION(__PRETTY_FUNCTION__);
+#endif
+
+#endif

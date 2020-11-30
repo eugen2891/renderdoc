@@ -43,7 +43,10 @@ WRAPPED_POOL_INST(WrappedID3D11Device);
 WrappedID3D11Device *WrappedID3D11Device::m_pCurrentWrappedDevice = NULL;
 
 WrappedID3D11Device::WrappedID3D11Device(ID3D11Device *realDevice, D3D11InitParams params)
-    : m_pDevice(realDevice), m_ScratchSerialiser(new StreamWriter(1024), Ownership::Stream)
+    : m_pDevice(realDevice),
+      m_ScratchSerialiser(new StreamWriter(1024), Ownership::Stream),
+      m_WrappedNVAPI(*this),
+      m_WrappedAGS(*this)
 {
   if(RenderDoc::Inst().GetCrashHandler())
     RenderDoc::Inst().GetCrashHandler()->RegisterMemoryRegion(this, sizeof(WrappedID3D11Device));
@@ -325,6 +328,9 @@ WrappedID3D11Device::~WrappedID3D11Device()
 
   SAFE_DELETE(m_Replay);
 
+  SAFE_RELEASE(m_ReplayNVAPI);
+  SAFE_RELEASE(m_ReplayAGS);
+
   if(RenderDoc::Inst().GetCrashHandler())
     RenderDoc::Inst().GetCrashHandler()->UnregisterMemoryRegion(this);
 }
@@ -449,6 +455,86 @@ ULONG STDMETHODCALLTYPE WrappedID3D11Debug::Release()
 {
   m_pDevice->Release();
   return 1;
+}
+
+HRESULT STDMETHODCALLTYPE WrappedNVAPI11::QueryInterface(REFIID riid, void **ppvObject)
+{
+  return E_NOINTERFACE;
+}
+
+ULONG STDMETHODCALLTYPE WrappedNVAPI11::AddRef()
+{
+  return 1;
+}
+
+ULONG STDMETHODCALLTYPE WrappedNVAPI11::Release()
+{
+  return 1;
+}
+
+BOOL STDMETHODCALLTYPE WrappedNVAPI11::SetReal(IUnknown *)
+{
+  // shouldn't be called on capture, do nothing
+  return FALSE;
+}
+
+IUnknown *STDMETHODCALLTYPE WrappedNVAPI11::GetReal()
+{
+  return m_pDevice.GetReal();
+}
+
+BOOL STDMETHODCALLTYPE WrappedNVAPI11::SetShaderExtUAV(DWORD space, DWORD reg, BOOL global)
+{
+  m_pDevice.SetShaderExtUAV(GPUVendor::nVidia, reg, global ? true : false);
+  return TRUE;
+}
+
+HRESULT STDMETHODCALLTYPE WrappedAGS11::QueryInterface(REFIID riid, void **ppvObject)
+{
+  return E_NOINTERFACE;
+}
+
+ULONG STDMETHODCALLTYPE WrappedAGS11::AddRef()
+{
+  return 1;
+}
+
+ULONG STDMETHODCALLTYPE WrappedAGS11::Release()
+{
+  return 1;
+}
+
+IUnknown *STDMETHODCALLTYPE WrappedAGS11::GetReal()
+{
+  return m_pDevice.GetReal();
+}
+
+BOOL STDMETHODCALLTYPE WrappedAGS11::SetShaderExtUAV(DWORD space, DWORD reg)
+{
+  m_pDevice.SetShaderExtUAV(GPUVendor::AMD, reg, true);
+  return TRUE;
+}
+
+HRESULT STDMETHODCALLTYPE WrappedAGS11::CreateD3D11(IDXGIAdapter *, D3D_DRIVER_TYPE, HMODULE, UINT,
+                                                    CONST D3D_FEATURE_LEVEL *, UINT FeatureLevels,
+                                                    UINT, CONST DXGI_SWAP_CHAIN_DESC *,
+                                                    IDXGISwapChain **, ID3D11Device **,
+                                                    D3D_FEATURE_LEVEL *, ID3D11DeviceContext **)
+{
+  // shouldn't be called on capture
+  return E_NOTIMPL;
+}
+HRESULT STDMETHODCALLTYPE WrappedAGS11::CreateD3D12(IUnknown *pAdapter,
+                                                    D3D_FEATURE_LEVEL MinimumFeatureLevel,
+                                                    REFIID riid, void **ppDevice)
+{
+  // shouldn't be called on capture
+  return E_NOTIMPL;
+}
+
+BOOL STDMETHODCALLTYPE WrappedAGS11::ExtensionsSupported()
+{
+  return FALSE;
 }
 
 HRESULT WrappedID3D11Device::QueryInterface(REFIID riid, void **ppvObject)
@@ -703,6 +789,18 @@ HRESULT WrappedID3D11Device::QueryInterface(REFIID riid, void **ppvObject)
     m_DummyInfoQueue.AddRef();
     return S_OK;
   }
+  else if(riid == __uuidof(INVAPID3DDevice))
+  {
+    // don't addref, this is an internal interface so we just don't addref at all
+    *ppvObject = (INVAPID3DDevice *)&m_WrappedNVAPI;
+    return S_OK;
+  }
+  else if(riid == __uuidof(IAGSD3DDevice))
+  {
+    // don't addref, this is an internal interface so we just don't addref at all
+    *ppvObject = (IAGSD3DDevice *)&m_WrappedAGS;
+    return S_OK;
+  }
   else if(riid == unwrappedID3D11InfoQueue__uuid)
   {
     if(m_pInfoQueue)
@@ -753,9 +851,7 @@ HRESULT WrappedID3D11Device::QueryInterface(REFIID riid, void **ppvObject)
     return m_WrappedVideo.QueryInterface(riid, ppvObject);
   }
 
-  WarnUnknownGUID("ID3D11Device", riid);
-
-  return RefCountDXGIObject::WrapQueryInterface(m_pDevice, riid, ppvObject);
+  return RefCountDXGIObject::WrapQueryInterface(m_pDevice, "ID3D11Device", riid, ppvObject);
 }
 
 rdcstr WrappedID3D11Device::GetChunkName(uint32_t idx)
@@ -1011,8 +1107,9 @@ bool WrappedID3D11Device::ProcessChunk(ReadSerialiser &ser, D3D11Chunk context)
       IID nul;
       return Serialise_OpenSharedResource(ser, 0, nul, NULL);
     }
-    case D3D11Chunk::SetShaderDebugPath:
-      return Serialise_SetShaderDebugPath(ser, NULL, NULL);
+    case D3D11Chunk::SetShaderDebugPath: return Serialise_SetShaderDebugPath(ser, NULL, NULL);
+    case D3D11Chunk::SetShaderExtUAV:
+      return Serialise_SetShaderExtUAV(ser, GPUVendor::Unknown, 0, true);
 
     // In order to get a warning if we miss a case, we explicitly handle the context chunks here.
     // for legacy reasons we forward to the immediate context's chunk processing here, since some
@@ -1392,6 +1489,7 @@ void WrappedID3D11Device::ReplayLog(uint32_t startEventID, uint32_t endEventID,
 
   if(!partial)
   {
+    RENDERDOC_PROFILEREGION("ApplyInitialContents");
     D3D11MarkerRegion apply("!!!!RenderDoc Internal: ApplyInitialContents");
     GetResourceManager()->ApplyInitialContents();
   }
@@ -2666,6 +2764,80 @@ void WrappedID3D11Device::SetResourceName(ID3D11DeviceChild *pResource, const ch
       record->AddChunk(scope.Get());
     }
   }
+}
+
+template <typename SerialiserType>
+bool WrappedID3D11Device::Serialise_SetShaderExtUAV(SerialiserType &ser, GPUVendor vendor,
+                                                    uint32_t reg, bool global)
+{
+  SERIALISE_ELEMENT(vendor);
+  SERIALISE_ELEMENT(reg);
+
+  SERIALISE_CHECK_READ_ERRORS();
+
+  if(IsReplayingAndReading())
+  {
+    m_VendorEXT = vendor;
+    m_GlobalEXTUAV = reg;
+    if(vendor == GPUVendor::nVidia)
+    {
+      if(!m_ReplayNVAPI)
+      {
+        RDCERR("This capture uses nvapi extensions but it failed to initialise.");
+        m_FailedReplayStatus = ReplayStatus::APIUnsupported;
+        return false;
+      }
+      m_ReplayNVAPI->SetShaderExtUAV(~0U, reg, true);
+    }
+    else if(vendor == GPUVendor::AMD)
+    {
+      // do nothing, it was configured at device create time. This is purely informational
+    }
+    else
+    {
+      RDCERR("This capture uses unexpected %s extensions which are not supported.",
+             ToStr(vendor).c_str());
+      m_FailedReplayStatus = ReplayStatus::APIUnsupported;
+      return false;
+    }
+  }
+
+  return true;
+}
+
+void WrappedID3D11Device::SetShaderExtUAV(GPUVendor vendor, uint32_t reg, bool global)
+{
+  // just overwrite, we don't expect to switch back and forth on a given device.
+  m_VendorEXT = vendor;
+  if(global)
+  {
+    SCOPED_LOCK(m_D3DLock);
+    m_GlobalEXTUAV = reg;
+    m_InitParams.VendorUAV = reg;
+  }
+  else
+  {
+    if(m_ThreadLocalEXTUAVSlot == ~0ULL)
+      m_ThreadLocalEXTUAVSlot = Threading::AllocateTLSSlot();
+    Threading::SetTLSValue(m_ThreadLocalEXTUAVSlot, (void *)(uintptr_t)reg);
+  }
+}
+
+INSTANTIATE_FUNCTION_SERIALISED(void, WrappedID3D11Device, SetShaderExtUAV, GPUVendor vendor,
+                                uint32_t reg, bool global);
+
+uint32_t WrappedID3D11Device::GetShaderExtUAV()
+{
+  if(m_ThreadLocalEXTUAVSlot != ~0ULL)
+  {
+    uint32_t threadVal = (uint32_t)(uintptr_t)Threading::GetTLSValue(m_ThreadLocalEXTUAVSlot);
+
+    if(threadVal != ~0U)
+      return threadVal;
+  }
+
+  SCOPED_LOCK(m_D3DLock);
+  return m_GlobalEXTUAV;
 }
 
 WrappedID3D11DeviceContext *WrappedID3D11Device::GetDeferredContext(size_t idx)

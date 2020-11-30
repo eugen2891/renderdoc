@@ -37,6 +37,7 @@
 #include "d3d12_command_queue.h"
 #include "d3d12_debug.h"
 #include "d3d12_device.h"
+#include "d3d12_hooks.h"
 #include "d3d12_resources.h"
 #include "d3d12_shader_cache.h"
 
@@ -76,7 +77,7 @@ void D3D12Replay::Initialise(IDXGIFactory1 *factory)
 
   if(m_pFactory)
   {
-    RefCountDXGIObject::HandleWrap(__uuidof(IDXGIFactory1), (void **)&m_pFactory);
+    RefCountDXGIObject::HandleWrap("D3D12Replay", __uuidof(IDXGIFactory1), (void **)&m_pFactory);
 
     LUID luid = m_pDevice->GetAdapterLuid();
 
@@ -1196,8 +1197,8 @@ void D3D12Replay::FillRootElements(const D3D12RenderState::RootSignature &rootSi
             if(desc)
             {
               const D3D12_CONSTANT_BUFFER_VIEW_DESC &cbv = desc->GetCBV();
-              WrappedID3D12Resource1::GetResIDFromAddr(cbv.BufferLocation, cb.resourceId,
-                                                       cb.byteOffset);
+              WrappedID3D12Resource::GetResIDFromAddr(cbv.BufferLocation, cb.resourceId,
+                                                      cb.byteOffset);
               cb.resourceId = rm->GetOriginalID(cb.resourceId);
               cb.byteSize = cbv.SizeInBytes;
 
@@ -1761,6 +1762,9 @@ uint32_t D3D12Replay::PickVertex(uint32_t eventId, int32_t width, int32_t height
 
     if(cfg.ortho)
       guessProj = Matrix4f::Orthographic(cfg.position.nearPlane, cfg.position.farPlane);
+
+    if(cfg.position.flipY)
+      guessProj[5] *= -1.0f;
 
     pickMVPProj = projMat.Mul(camMat.Mul(guessProj.Inverse()));
   }
@@ -2703,7 +2707,7 @@ void D3D12Replay::GetBufferData(ResourceId buff, uint64_t offset, uint64_t lengt
     return;
   }
 
-  WrappedID3D12Resource1 *buffer = it->second;
+  WrappedID3D12Resource *buffer = it->second;
 
   if(buffer->GetDesc().Dimension != D3D12_RESOURCE_DIMENSION_BUFFER)
   {
@@ -2878,6 +2882,22 @@ void D3D12Replay::BuildTargetShader(ShaderEncoding sourceEncoding, const bytebuf
 
 void D3D12Replay::ReplaceResource(ResourceId from, ResourceId to)
 {
+  if(WrappedID3D12Shader::IsShader(from))
+  {
+    WrappedID3D12Shader *fromsh =
+        (WrappedID3D12Shader *)m_pDevice->GetResourceManager()->GetCurrentResource(from);
+    WrappedID3D12Shader *tosh =
+        (WrappedID3D12Shader *)m_pDevice->GetResourceManager()->GetCurrentResource(to);
+
+    if(fromsh && tosh)
+    {
+      uint32_t slot = ~0U, space = ~0U;
+      // copy the shader ext slot
+      fromsh->GetShaderExtSlot(slot, space);
+      tosh->SetShaderExtSlot(slot, space);
+    }
+  }
+
   // replace the shader module
   m_pDevice->GetResourceManager()->ReplaceResource(from, to);
 
@@ -3346,7 +3366,7 @@ void D3D12Replay::GetTextureData(ResourceId tex, const Subresource &sub,
     m_pDevice->FlushLists();
 
     // expand multisamples out to array
-    GetDebugManager()->CopyTex2DMSToArray(Unwrap(arrayTexture), Unwrap(srcTexture));
+    GetDebugManager()->CopyTex2DMSToArray(NULL, Unwrap(arrayTexture), Unwrap(srcTexture));
 
     tmpTexture = srcTexture = arrayTexture;
 
@@ -3810,8 +3830,10 @@ ReplayStatus D3D12_CreateReplayDevice(RDCFile *rdc, const ReplayOptions &opts, I
     }
   }
 
-  PFN_D3D12_CREATE_DEVICE createDevice =
+  PFN_D3D12_CREATE_DEVICE createDevicePtr =
       (PFN_D3D12_CREATE_DEVICE)GetProcAddress(d3d12lib, "D3D12CreateDevice");
+
+  RealD3D12CreateFunction createDevice = createDevicePtr;
 
   HMODULE dxgilib = LoadLibraryA("dxgi.dll");
   if(dxgilib == NULL)
@@ -3925,6 +3947,43 @@ ReplayStatus D3D12_CreateReplayDevice(RDCFile *rdc, const ReplayOptions &opts, I
     ChooseBestMatchingAdapter(GraphicsAPI::D3D12, factory, initParams.AdapterDesc, opts, NULL,
                               &adapter);
 
+  INVAPID3DDevice *nvapiDev = NULL;
+  IAGSD3DDevice *agsDev = NULL;
+
+  if(initParams.VendorExtensions == GPUVendor::nVidia)
+  {
+    nvapiDev = InitialiseNVAPIReplay();
+
+    if(!nvapiDev)
+    {
+      RDCERR("Capture requires nvapi to replay, but it's not available or can't be initialised");
+      return ReplayStatus::APIHardwareUnsupported;
+    }
+  }
+  else if(initParams.VendorExtensions == GPUVendor::AMD)
+  {
+    agsDev = InitialiseAGSReplay(initParams.VendorUAVSpace, initParams.VendorUAV);
+
+    if(!agsDev)
+    {
+      RDCERR("Capture requires ags to replay, but it's not available or can't be initialised");
+      return ReplayStatus::APIHardwareUnsupported;
+    }
+
+    createDevice = [agsDev](IUnknown *pAdapter, D3D_FEATURE_LEVEL MinimumFeatureLevel, REFIID riid,
+                            void **ppDevice) {
+      return agsDev->CreateD3D12(pAdapter, MinimumFeatureLevel, riid, ppDevice);
+    };
+  }
+  else if(initParams.VendorExtensions != GPUVendor::Unknown)
+  {
+    RDCERR(
+        "Capture requires vendor extensions by %s to replay, but no support for that is "
+        "available.",
+        ToStr(initParams.VendorExtensions).c_str());
+    return ReplayStatus::APIInitFailed;
+  }
+
   bool debugLayerEnabled = false;
 
   if(!isProxy)
@@ -3974,8 +4033,39 @@ ReplayStatus D3D12_CreateReplayDevice(RDCFile *rdc, const ReplayOptions &opts, I
     return ReplayStatus::APIHardwareUnsupported;
   }
 
+  if(nvapiDev)
+  {
+    BOOL ok = nvapiDev->SetReal(dev);
+    if(!ok)
+    {
+      RDCERR(
+          "This capture needs nvapi extensions to replay, but device selected for replay can't "
+          "support nvapi extensions");
+      SAFE_RELEASE(dev);
+      SAFE_RELEASE(nvapiDev);
+      SAFE_RELEASE(factory);
+      SAFE_DELETE(rgp);
+      return ReplayStatus::APIHardwareUnsupported;
+    }
+  }
+
+  if(agsDev)
+  {
+    if(!agsDev->ExtensionsSupported())
+    {
+      RDCERR(
+          "This capture needs AGS extensions to replay, but device selected for replay can't "
+          "support AGS extensions");
+      SAFE_RELEASE(dev);
+      SAFE_RELEASE(nvapiDev);
+      SAFE_RELEASE(factory);
+      SAFE_DELETE(rgp);
+      return ReplayStatus::APIHardwareUnsupported;
+    }
+  }
+
   WrappedID3D12Device *wrappedDev = new WrappedID3D12Device(dev, initParams, debugLayerEnabled);
-  wrappedDev->SetInitParams(initParams, ver, opts);
+  wrappedDev->SetInitParams(initParams, ver, opts, nvapiDev, agsDev);
 
   if(!isProxy)
     RDCLOG("Created device.");
