@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -1147,7 +1147,10 @@ void GLReplay::DeleteDebugData()
 
   MakeCurrentReplayContext(&m_ReplayCtx);
 
-  GL.glDebugMessageCallback(NULL, NULL);
+  if(HasExt[KHR_debug])
+  {
+    GL.glDebugMessageCallback(NULL, NULL);
+  }
 
   if(DebugData.overlayProg)
     drv.glDeleteProgram(DebugData.overlayProg);
@@ -1163,7 +1166,10 @@ void GLReplay::DeleteDebugData()
 
   MakeCurrentReplayContext(m_DebugCtx);
 
-  GL.glDebugMessageCallback(NULL, NULL);
+  if(HasExt[KHR_debug])
+  {
+    GL.glDebugMessageCallback(NULL, NULL);
+  }
 
   ClearPostVSCache();
 
@@ -1714,7 +1720,7 @@ bool GLReplay::GetMinMax(ResourceId texid, const Subresource &sub, CompType type
   switch(texDetails.curType)
   {
     case eGL_RENDERBUFFER:
-      texSlot = RESTYPE_TEX2D;
+      texSlot = texDetails.samples > 1 ? RESTYPE_TEX2DMS : RESTYPE_TEX2D;
       renderbuffer = true;
       break;
     case eGL_TEXTURE_1D: texSlot = RESTYPE_TEX1D; break;
@@ -1740,6 +1746,8 @@ bool GLReplay::GetMinMax(ResourceId texid, const Subresource &sub, CompType type
     // need replay context active to do blit (as FBOs aren't shared)
     MakeCurrentReplayContext(&m_ReplayCtx);
 
+    GLMarkerRegion blitRegion("Renderbuffer Blit");
+
     GLuint curDrawFBO = 0;
     GLuint curReadFBO = 0;
     GL.glGetIntegerv(eGL_DRAW_FRAMEBUFFER_BINDING, (GLint *)&curDrawFBO);
@@ -1756,10 +1764,12 @@ bool GLReplay::GetMinMax(ResourceId texid, const Subresource &sub, CompType type
     GL.glBindFramebuffer(eGL_READ_FRAMEBUFFER, curReadFBO);
 
     texname = texDetails.renderbufferReadTex;
-    target = eGL_TEXTURE_2D;
+    target = texDetails.samples > 1 ? eGL_TEXTURE_2D_MULTISAMPLE : eGL_TEXTURE_2D;
   }
 
   MakeCurrentReplayContext(m_DebugCtx);
+
+  GLMarkerRegion region("GetMinMax");
 
   RDCGLenum dsTexMode = eGL_NONE;
   if(IsDepthStencilFormat(texDetails.internalFormat))
@@ -1912,8 +1922,9 @@ bool GLReplay::GetMinMax(ResourceId texid, const Subresource &sub, CompType type
   return true;
 }
 
-bool GLReplay::GetHistogram(ResourceId texid, const Subresource &sub, CompType typeCast, float minval,
-                            float maxval, bool channels[4], rdcarray<uint32_t> &histogram)
+bool GLReplay::GetHistogram(ResourceId texid, const Subresource &sub, CompType typeCast,
+                            float minval, float maxval, const rdcfixedarray<bool, 4> &channels_,
+                            rdcarray<uint32_t> &histogram)
 {
   if(minval >= maxval || texid == ResourceId())
     return false;
@@ -1923,6 +1934,9 @@ bool GLReplay::GetHistogram(ResourceId texid, const Subresource &sub, CompType t
 
   if(!HasExt[ARB_compute_shader] || !HasExt[ARB_shading_language_420pack])
     return false;
+
+  // take a local copy so we can modify it
+  rdcfixedarray<bool, 4> channels = channels_;
 
   auto &texDetails = m_pDriver->m_Textures[texid];
 
@@ -1936,7 +1950,7 @@ bool GLReplay::GetHistogram(ResourceId texid, const Subresource &sub, CompType t
   switch(texDetails.curType)
   {
     case eGL_RENDERBUFFER:
-      texSlot = RESTYPE_TEX2D;
+      texSlot = texDetails.samples > 1 ? RESTYPE_TEX2DMS : RESTYPE_TEX2D;
       renderbuffer = true;
       break;
     case eGL_TEXTURE_1D: texSlot = RESTYPE_TEX1D; break;
@@ -1962,6 +1976,8 @@ bool GLReplay::GetHistogram(ResourceId texid, const Subresource &sub, CompType t
     // need replay context active to do blit (as FBOs aren't shared)
     MakeCurrentReplayContext(&m_ReplayCtx);
 
+    GLMarkerRegion blitRegion("Renderbuffer Blit");
+
     GLuint curDrawFBO = 0;
     GLuint curReadFBO = 0;
     GL.glGetIntegerv(eGL_DRAW_FRAMEBUFFER_BINDING, (GLint *)&curDrawFBO);
@@ -1978,10 +1994,12 @@ bool GLReplay::GetHistogram(ResourceId texid, const Subresource &sub, CompType t
     GL.glBindFramebuffer(eGL_READ_FRAMEBUFFER, curReadFBO);
 
     texname = texDetails.renderbufferReadTex;
-    target = eGL_TEXTURE_2D;
+    target = texDetails.samples > 1 ? eGL_TEXTURE_2D_MULTISAMPLE : eGL_TEXTURE_2D;
   }
 
   MakeCurrentReplayContext(m_DebugCtx);
+
+  GLMarkerRegion region("GetHistogram");
 
   RDCGLenum dsTexMode = eGL_NONE;
   if(IsDepthStencilFormat(texDetails.internalFormat))

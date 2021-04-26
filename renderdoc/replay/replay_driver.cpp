@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -181,8 +181,8 @@ void SetupDrawcallPointers(rdcarray<DrawcallDescription *> &drawcallTable,
   }
 }
 
-void PatchLineStripIndexBuffer(const DrawcallDescription *draw, uint8_t *idx8, uint16_t *idx16,
-                               uint32_t *idx32, rdcarray<uint32_t> &patchedIndices)
+void PatchLineStripIndexBuffer(const DrawcallDescription *draw, Topology topology, uint8_t *idx8,
+                               uint16_t *idx16, uint32_t *idx32, rdcarray<uint32_t> &patchedIndices)
 {
   const uint32_t restart = 0xffffffff;
 
@@ -190,7 +190,7 @@ void PatchLineStripIndexBuffer(const DrawcallDescription *draw, uint8_t *idx8, u
   (idx16 ? idx16[index + (offs)] \
          : (idx32 ? idx32[index + (offs)] : (idx8 ? idx8[index + (offs)] : index + (offs))))
 
-  switch(draw->topology)
+  switch(topology)
   {
     case Topology::TriangleList:
     {
@@ -268,7 +268,7 @@ void PatchLineStripIndexBuffer(const DrawcallDescription *draw, uint8_t *idx8, u
       break;
     }
     default:
-      RDCERR("Unsupported topology %s for line-list patching", ToStr(draw->topology).c_str());
+      RDCERR("Unsupported topology %s for line-list patching", ToStr(topology).c_str());
       return;
   }
 
@@ -337,7 +337,7 @@ void PatchTriangleFanRestartIndexBufer(rdcarray<uint32_t> &patchedIndices, uint3
   newIndices.swap(patchedIndices);
 }
 
-void StandardFillCBufferVariable(ResourceId shader, const ShaderVariableDescriptor &desc,
+void StandardFillCBufferVariable(ResourceId shader, const ShaderConstantDescriptor &desc,
                                  uint32_t dataOffset, const bytebuf &data, ShaderVariable &outvar,
                                  uint32_t matStride)
 {
@@ -369,7 +369,7 @@ void StandardFillCBufferVariable(ResourceId shader, const ShaderVariableDescript
     const byte *srcData = data.data() + dataOffset;
     const size_t avail = data.size() - dataOffset;
 
-    byte *dstData = elemByteSize == 8 ? (byte *)outvar.value.u64v : (byte *)outvar.value.uv;
+    byte *dstData = outvar.value.u8v.data();
     const size_t dstStride = elemByteSize == 8 ? 8 : 4;
 
     // each secondaryDim element (row or column) is stored in a primaryDim-vector.
@@ -401,7 +401,7 @@ void StandardFillCBufferVariable(ResourceId shader, const ShaderVariableDescript
       {
         for(size_t ri = 0; ri < rows; ri++)
           for(size_t ci = 0; ci < cols; ci++)
-            outvar.value.uv[ri * cols + ci] = tmp.value.uv[ci * rows + ri];
+            outvar.value.u32v[ri * cols + ci] = tmp.value.u32v[ci * rows + ri];
       }
     }
 
@@ -412,8 +412,8 @@ void StandardFillCBufferVariable(ResourceId shader, const ShaderVariableDescript
       {
         for(size_t ci = 0; ci < cols; ci++)
         {
-          outvar.value.fv[ri * cols + ci] =
-              ConvertFromHalf((uint16_t)outvar.value.uv[ri * cols + ci]);
+          outvar.value.f32v[ri * cols + ci] =
+              ConvertFromHalf((uint16_t)outvar.value.u32v[ri * cols + ci]);
         }
       }
     }
@@ -426,7 +426,7 @@ void StandardFillCBufferVariable(ResourceId shader, const ShaderVariableDescript
       {
         for(size_t ci = 0; ci < cols; ci++)
         {
-          uint32_t &u = outvar.value.uv[ri * cols + ci];
+          uint32_t &u = outvar.value.u32v[ri * cols + ci];
 
           if(u & testMask)
             u |= extendMask;
@@ -587,6 +587,10 @@ FloatVector HighlightCache::InterpretVertex(const byte *data, uint32_t vert, con
 {
   FloatVector ret(0.0f, 0.0f, 0.0f, 1.0f);
 
+  if(cfg.position.format.compType == CompType::UInt ||
+     cfg.position.format.compType == CompType::SInt || cfg.position.format.compCount == 4)
+    ret.w = 0.0f;
+
   if(useidx && idxData)
   {
     if(vert >= (uint32_t)indices.size())
@@ -623,6 +627,10 @@ FloatVector HighlightCache::InterpretVertex(const byte *data, uint32_t vert,
   if(data + fmt.ElementSize() > end)
   {
     valid = false;
+
+    if(fmt.compType == CompType::UInt || fmt.compType == CompType::SInt || fmt.compCount == 4)
+      return FloatVector(0.0f, 0.0f, 0.0f, 0.0f);
+
     return FloatVector(0.0f, 0.0f, 0.0f, 1.0f);
   }
 

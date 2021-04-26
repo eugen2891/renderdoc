@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -586,10 +586,8 @@ public:
 
       std::string reportPath = conv(dumpFolder) + "\\" + dumpId + ".zip";
 
-      {
-        rdcstr tmp = rdcstr(reportPath.c_str(), reportPath.size());
-        RENDERDOC_CreateBugReport(conv(wlogpath).c_str(), conv(wdump).c_str(), tmp);
-      }
+      RENDERDOC_CreateBugReport(rdcstr(conv(wlogpath).c_str()), rdcstr(conv(wdump).c_str()),
+                                rdcstr(reportPath.c_str()));
 
       for(size_t i = 0; i < reportPath.size(); i++)
         if(reportPath[i] == '\\')

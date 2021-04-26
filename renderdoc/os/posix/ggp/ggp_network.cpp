@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -37,7 +37,7 @@ uint32_t Socket::GetRemoteIP() const
   return GetIPFromTCPSocket((int)socket);
 }
 
-Socket *CreateServerSocket(const char *bindaddr, uint16_t port, int queuesize)
+Socket *CreateServerSocket(const rdcstr &bindaddr, uint16_t port, int queuesize)
 {
   return CreateTCPServerSocket(bindaddr, port, queuesize);
 }

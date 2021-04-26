@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -103,6 +103,7 @@ private slots:
   // manual slots
   void vulkanLayerWarn_mouseClick();
   void androidWarn_mouseClick();
+  void lineEdit_keyPress(QKeyEvent *);
 
 private:
   Ui::CaptureDialog *ui;

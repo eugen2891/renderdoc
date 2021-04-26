@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -143,7 +143,7 @@ public:
 
   Subresource GetSelectedSubresource() override;
   void SetSelectedSubresource(Subresource sub) override;
-  void GotoLocation(int x, int y) override;
+  void GotoLocation(uint32_t x, uint32_t y) override;
   DebugOverlay GetTextureOverlay() override;
   void SetTextureOverlay(DebugOverlay overlay) override;
 
@@ -307,6 +307,8 @@ private:
 
   void ShowGotoPopup();
 
+  bool ShouldFlipForGL();
+
   void UI_UpdateFittedScale();
   void UI_SetScale(float s);
   void UI_SetScale(float s, int x, int y);
@@ -339,6 +341,7 @@ private:
 
   ResourceId m_LockedId;
   QMap<ResourceId, QWidget *> m_LockedTabs;
+  int m_ResourceCacheID = -1;
 
   TextureGoto *m_Goto;
 

@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -30,6 +30,7 @@
 #include "api/replay/rdcflatmap.h"
 #include "api/replay/rdcpair.h"
 #include "api/replay/rdcstr.h"
+#include "api/replay/resourceid.h"
 #include "common/formatting.h"
 #include "common/globalconfig.h"
 #include "common/timing.h"
@@ -152,12 +153,6 @@ TEST_CASE("Test array type", "[basictypes]")
     CHECK(test.empty());
     CHECK(test.isEmpty());
     CHECK(test.begin() == test.end());
-
-    sum = 0;
-    for(int x : test)
-      sum += x;
-
-    CHECK(sum == 0);
 
     test = {4, 1, 77, 0, 0, 8, 20, 934};
 
@@ -1006,6 +1001,7 @@ TEST_CASE("Test string type", "[basictypes][string]")
       CHECK(strlen(test.c_str()) == len);
       CHECK(test.c_str() != NULL);
       CHECK(strcmp(test.c_str(), str) == 0);
+      CHECK(strcmp(test.data(), str) == 0);
       CHECK(test != ((const char *)NULL));
       CHECK(test == str);
       CHECK(test == rdcstr(str));
@@ -1037,6 +1033,7 @@ TEST_CASE("Test string type", "[basictypes][string]")
       CHECK(strlen(test.c_str()) == len);
       CHECK(test.c_str() != NULL);
       CHECK(strcmp(test.c_str(), str) < 0);
+      CHECK(strcmp(test.data(), str) < 0);
       CHECK(test != str);
       CHECK(test != rdcstr(str));
       CHECK_NULL_TERM(test);
@@ -1080,6 +1077,33 @@ TEST_CASE("Test string type", "[basictypes][string]")
     lambda(LARGE_STRING, LARGE_STRING);
     lambda(VERY_LARGE_STRING, VERY_LARGE_STRING);
     lambda(STRING_LITERAL(LARGE_STRING), LARGE_STRING);
+  };
+
+  SECTION("Assigning a string to itself")
+  {
+    auto lambda = [](rdcstr test) {
+
+      // create a version without doing self-insertion
+      rdcstr test2 = test;
+
+      // self-assign
+      test2 = test2;
+
+      CHECK(test.size() == test2.size());
+      CHECK(test.empty() == test2.empty());
+
+      for(size_t i = 0; i < test.size(); i++)
+      {
+        CHECK(test[i] == test2[i]);
+      }
+
+      CHECK(test.c_str() != test2.c_str());
+    };
+
+    lambda(SMALL_STRING);
+    lambda(LARGE_STRING);
+    lambda(VERY_LARGE_STRING);
+    lambda(STRING_LITERAL(LARGE_STRING));
   };
 
   SECTION("Inserting from string into itself")
@@ -1247,6 +1271,18 @@ TEST_CASE("Test string type", "[basictypes][string]")
     test2 = test + '!';
 
     CHECK(test2 == "Hello World?!");
+
+    test2.append(" cstring");
+
+    CHECK(test2 == "Hello World?! cstring");
+
+    test2.append(rdcstr(" rdcstr"));
+
+    CHECK(test2 == "Hello World?! cstring rdcstr");
+
+    test2.append(" cstring that is truncated", 5);
+
+    CHECK(test2 == "Hello World?! cstring rdcstr cstr");
   };
 
   SECTION("insert")
@@ -1344,6 +1380,29 @@ TEST_CASE("Test string type", "[basictypes][string]")
     CHECK(rdcstr("").trimmed() == "");
     CHECK(rdcstr("  ").trimmed() == "");
     CHECK(rdcstr("  \t  \n ").trimmed() == "");
+  };
+
+  SECTION("fill")
+  {
+    rdcstr s;
+    s = "Foo bar";
+
+    CHECK(s == "Foo bar");
+
+    s.fill(4, 'o');
+
+    CHECK(s == "oooo");
+    CHECK(s.size() == 4);
+
+    s.fill(0, 'o');
+
+    CHECK(s == "");
+    CHECK(s.size() == 0);
+
+    s.fill(10, '_');
+
+    CHECK(s == "__________");
+    CHECK(s.size() == 10);
   };
 
   SECTION("push_back and pop_back")
@@ -1457,11 +1516,25 @@ TEST_CASE("Test string type", "[basictypes][string]")
     CHECK(test.indexOf('l') == 2);
     CHECK(test.indexOf('?') == -1);
 
+    CHECK(test.indexOf('o') == 4);
+    CHECK(test.indexOf('o', 4) == 4);
+    CHECK(test.indexOf('o', 5) == 8);
+    CHECK(test.indexOf('o', 10) == -1);
+    CHECK(test.indexOf('o', -1) == -1);
+
+    CHECK(test.indexOf('o', 0, -1) == 4);
+    CHECK(test.indexOf('o', 0, 100) == 4);
+    CHECK(test.indexOf('o', 5, -1) == 8);
+    CHECK(test.indexOf('o', 5, 100) == 8);
+    CHECK(test.indexOf('o', 5, 9) == 8);
+    CHECK(test.indexOf('o', 5, 8) == -1);
+
     CHECK(test.contains('!'));
     CHECK_FALSE(test.contains('?'));
 
     CHECK(test.contains('H'));
     CHECK(test.contains("Hello"));
+    CHECK(test.contains(rdcstr("Hello")));
 
     char H = test.takeAt(0);
 
@@ -1557,6 +1630,8 @@ TEST_CASE("Test string type", "[basictypes][string]")
     CHECK(test.find("find!") == 34);
     CHECK(test.find("find!", 30, 39) == 34);
     CHECK(test.find("find!", 30, 38) == -1);
+    CHECK(test.find("find!", -1) == -1);
+    CHECK(test.find("find!", -1, 100) == -1);
 
     CHECK(test.find('s') == 2);
     CHECK(test.find('s', 2) == 2);
@@ -1571,6 +1646,8 @@ TEST_CASE("Test string type", "[basictypes][string]")
     CHECK(test.find('!', 38, 39) == 38);
     CHECK(test.find('!', 38, 38) == -1);
     CHECK(test.find('!', 39, 38) == -1);
+    CHECK(test.find('!', -1) == -1);
+    CHECK(test.find('!', -1, 100) == -1);
 
     CHECK(test.find_first_of("sx!") == 2);
     CHECK(test.find_first_of("sx!", 2) == 2);
@@ -1578,6 +1655,8 @@ TEST_CASE("Test string type", "[basictypes][string]")
     CHECK(test.find_first_of("sx!", 2, 3) == 2);
     CHECK(test.find_first_of("sx!", 2, 2) == -1);
     CHECK(test.find_first_of("sx!", 3, 2) == -1);
+    CHECK(test.find_first_of("sx!", -1) == -1);
+    CHECK(test.find_first_of("sx!", -1, 100) == -1);
 
     CHECK(test.find_first_not_of("Teot") == 2);
     CHECK(test.find_first_not_of("Teot", 2) == 2);
@@ -1585,6 +1664,8 @@ TEST_CASE("Test string type", "[basictypes][string]")
     CHECK(test.find_first_not_of("Teot", 2, 3) == 2);
     CHECK(test.find_first_not_of("Teot", 2, 2) == -1);
     CHECK(test.find_first_not_of("Teot", 3, 2) == -1);
+    CHECK(test.find_first_not_of("Teot", -1) == -1);
+    CHECK(test.find_first_not_of("Teot", -1, 100) == -1);
 
     CHECK(test.find_last_of("pur") == 31);
     CHECK(test.find_last_of("pur", 30) == 31);
@@ -1599,6 +1680,8 @@ TEST_CASE("Test string type", "[basictypes][string]")
     CHECK(test.find_last_of("pur", 10, 13) == -1);
     CHECK(test.find_last_of("pur", 13, 13) == -1);
     CHECK(test.find_last_of("pur", 15, 13) == -1);
+    CHECK(test.find_last_of("pur", -1) == -1);
+    CHECK(test.find_last_of("pur", -1, 100) == -1);
 
     CHECK(test.find_last_not_of("ibe!fonudsc") == 33);
     CHECK(test.find_last_not_of("ibe!fonudsc", 20) == 33);
@@ -1608,6 +1691,8 @@ TEST_CASE("Test string type", "[basictypes][string]")
     CHECK(test.find_last_not_of("ibe!fonudsc", 29, 30) == 29);
     CHECK(test.find_last_not_of("ibe!fonudsc", 29, 29) == -1);
     CHECK(test.find_last_not_of("ibe!fonudsc", 30, 29) == -1);
+    CHECK(test.find_last_not_of("ibe!fonudsc", -1) == -1);
+    CHECK(test.find_last_not_of("ibe!fonudsc", -1, 100) == -1);
   };
 
   SECTION("Comparisons")
@@ -1690,6 +1775,81 @@ TEST_CASE("Test string type", "[basictypes][string]")
 
     CHECK(test == "Short literal");
     CHECK(test.size() == test2.size());
+  };
+
+  SECTION("Inflexible string tests")
+  {
+    rdcinflexiblestr test = rdcstr("Hello, World");
+
+    CHECK(test == "Hello, World");
+    CHECK(test == "Hello, World"_lit);
+    CHECK(test == rdcstr("Hello, World"));
+    CHECK(test == rdcinflexiblestr("Hello, World"));
+    CHECK_FALSE(test == "Hello, World!");
+    CHECK_FALSE(test == "Hello, World!"_lit);
+    CHECK_FALSE(test == rdcstr("Hello, World!"));
+    CHECK_FALSE(test == rdcinflexiblestr("Hello, World!"));
+    CHECK_FALSE(test.empty());
+
+    rdcstr str = test;
+
+    CHECK(str == "Hello, World");
+    CHECK(str == "Hello, World"_lit);
+    CHECK(str == rdcstr("Hello, World"));
+    CHECK(str == rdcinflexiblestr("Hello, World"));
+    CHECK_FALSE(str == "Hello, World!");
+    CHECK_FALSE(str == "Hello, World!"_lit);
+    CHECK_FALSE(str == rdcstr("Hello, World!"));
+    CHECK_FALSE(str == rdcinflexiblestr("Hello, World!"));
+    CHECK_FALSE(str.empty());
+
+    test = "Hello, World"_lit;
+
+    CHECK(test == "Hello, World");
+    CHECK(test == "Hello, World"_lit);
+    CHECK(test == rdcstr("Hello, World"));
+    CHECK(test == rdcinflexiblestr("Hello, World"));
+    CHECK_FALSE(test == "Hello, World!");
+    CHECK_FALSE(test == "Hello, World!"_lit);
+    CHECK_FALSE(test == rdcstr("Hello, World!"));
+    CHECK_FALSE(test == rdcinflexiblestr("Hello, World!"));
+    CHECK_FALSE(test.empty());
+
+    str = test;
+
+    CHECK(str == "Hello, World");
+    CHECK(str == "Hello, World"_lit);
+    CHECK(str == rdcstr("Hello, World"));
+    CHECK(str == rdcinflexiblestr("Hello, World"));
+    CHECK_FALSE(str == "Hello, World!");
+    CHECK_FALSE(str == "Hello, World!"_lit);
+    CHECK_FALSE(str == rdcstr("Hello, World!"));
+    CHECK_FALSE(str == rdcinflexiblestr("Hello, World!"));
+    CHECK_FALSE(str.empty());
+
+    rdcinflexiblestr empty;
+
+    CHECK(empty.empty());
+    CHECK(empty == "");
+    CHECK(empty == ""_lit);
+    CHECK(empty == rdcstr(""));
+    CHECK(empty == rdcinflexiblestr(""));
+    CHECK_FALSE(empty == "Hello, World!");
+    CHECK_FALSE(empty == "Hello, World!"_lit);
+    CHECK_FALSE(empty == rdcstr("Hello, World!"));
+    CHECK_FALSE(empty == rdcinflexiblestr("Hello, World!"));
+
+    str = empty;
+
+    CHECK(str.empty());
+    CHECK(str == "");
+    CHECK(str == ""_lit);
+    CHECK(str == rdcstr(""));
+    CHECK(str == rdcinflexiblestr(""));
+    CHECK_FALSE(str == "Hello, World!");
+    CHECK_FALSE(str == "Hello, World!"_lit);
+    CHECK_FALSE(str == rdcstr("Hello, World!"));
+    CHECK_FALSE(str == rdcinflexiblestr("Hello, World!"));
   };
 };
 
@@ -1887,6 +2047,81 @@ TEST_CASE("Test flatmap type", "[basictypes][flatmap]")
 
     it = test.upper_bound(8);
     CHECK(it == test.end());
+  };
+};
+
+union foo
+{
+  rdcfixedarray<float, 16> f32v;
+  rdcfixedarray<uint32_t, 16> u32v;
+  rdcfixedarray<int32_t, 16> s32v;
+};
+
+TEST_CASE("Test rdcfixedarray type", "[basictypes][rdcfixedarray]")
+{
+  SECTION("Basic test")
+  {
+    rdcfixedarray<int32_t, 8> test = {};
+
+    CHECK(test.size() == 8);
+    CHECK(test.byteSize() == 32);
+    CHECK(test.begin() + 8 == test.end());
+    CHECK(test[0] == 0);
+    CHECK(test[2] == 0);
+
+    test = {4, 1, 77, 0, 0, 8, 20, 934};
+
+    CHECK(test.contains(1));
+    CHECK(!test.contains(2));
+    CHECK(test.indexOf(8) == 5);
+    CHECK(test.indexOf(9) == -1);
+
+    CHECK(test[0] == 4);
+    CHECK(test[2] == 77);
+    CHECK(test[4] == 0);
+
+    int sum = 0;
+    for(int x : test)
+      sum += x;
+
+    CHECK(sum == 1044);
+
+    test[4] = 1;
+
+    CHECK(test[0] == 4);
+    CHECK(test[2] == 77);
+    CHECK(test[4] == 1);
+
+    sum = 0;
+    for(int x : test)
+      sum += x;
+
+    CHECK(sum == 1045);
+  };
+
+  SECTION("Test of rdcfixedarray of ResourceId")
+  {
+    rdcfixedarray<ResourceId, 8> resources = {};
+
+    ResourceId r = ResourceIDGen::GetNewUniqueID();
+    resources[2] = r;
+    resources[4] = ResourceIDGen::GetNewUniqueID();
+
+    CHECK(resources[2] != resources[4]);
+    CHECK(resources[2] == r);
+  };
+
+  SECTION("Test of rdcfixedarray in unions")
+  {
+    foo u = {};
+
+    u.f32v[0] = 1.0f;
+
+    CHECK(u.u32v[0] == 0x3f800000);
+
+    u = foo();
+
+    CHECK(u.u32v[0] == 0);
   };
 };
 

@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -477,7 +477,7 @@ void Analytics::Load()
   Analytics::db = &actualDB;
 
   // find the filename where the analytics will be saved
-  analyticsSaveLocation = configFilePath(lit("analytics.json"));
+  analyticsSaveLocation = ConfigFilePath(lit("analytics.json"));
 
   QFile f(analyticsSaveLocation);
 

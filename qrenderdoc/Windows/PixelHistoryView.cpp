@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -232,8 +232,7 @@ public:
                          .arg(mods.front().eventId)
                          .arg(drawcall->name);
 
-              if(memcmp(mods[0].preMod.col.uintValue, mods[0].postMod.col.uintValue,
-                        sizeof(uint32_t) * 4) == 0)
+              if(mods[0].preMod.col.uintValue == mods[0].postMod.col.uintValue)
               {
                 ret += tr("\nNo change in tex value");
                 uavnowrite = true;
@@ -356,8 +355,7 @@ public:
             passed |= m.Passed();
 
           if(mods[0].directShaderWrite &&
-             memcmp(mods[0].preMod.col.uintValue, mods[0].postMod.col.uintValue,
-                    sizeof(uint32_t) * 4) == 0)
+             mods[0].preMod.col.uintValue == mods[0].postMod.col.uintValue)
             return QBrush(QColor::fromRgb(235, 235, 235));
 
           return passed ? QBrush(QColor::fromRgb(235, 255, 235))
@@ -800,7 +798,8 @@ void PixelHistoryView::jumpToPrimitive(EventTag tag)
 
   if(draw)
   {
-    uint32_t vertIdx = RENDERDOC_VertexOffset(draw->topology, tag.primitive);
+    uint32_t vertIdx =
+        RENDERDOC_VertexOffset(m_Ctx.CurPipelineState().GetPrimitiveTopology(), tag.primitive);
 
     if(vertIdx != ~0U)
       viewer->ScrollToRow(vertIdx);

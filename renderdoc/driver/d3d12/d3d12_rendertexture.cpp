@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -59,7 +59,7 @@ void D3D12DebugManager::PrepareTextureSampling(ID3D12Resource *resource, CompTyp
       srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DMSARRAY;
       srvDesc.Texture2DMSArray.ArraySize = ~0U;
 
-      if(IsDepthFormat(resourceDesc.Format))
+      if(IsDepthFormat(srvDesc.Format))
         srvOffset = RESTYPE_DEPTH_MS;
     }
     else
@@ -69,7 +69,7 @@ void D3D12DebugManager::PrepareTextureSampling(ID3D12Resource *resource, CompTyp
       srvDesc.Texture2D.MipLevels = ~0U;
       srvDesc.Texture2DArray.ArraySize = ~0U;
 
-      if(IsDepthFormat(resourceDesc.Format))
+      if(IsDepthFormat(srvDesc.Format))
         srvOffset = RESTYPE_DEPTH;
     }
   }
@@ -85,7 +85,7 @@ void D3D12DebugManager::PrepareTextureSampling(ID3D12Resource *resource, CompTyp
 
   // if it's a depth and stencil image, increment (as the restype for
   // depth/stencil is one higher than that for depth only).
-  if(IsDepthAndStencilFormat(resourceDesc.Format))
+  if(IsDepthAndStencilFormat(srvDesc.Format))
     resType++;
 
   if(IsUIntFormat(srvDesc.Format))
@@ -100,8 +100,7 @@ void D3D12DebugManager::PrepareTextureSampling(ID3D12Resource *resource, CompTyp
   D3D12_SHADER_RESOURCE_VIEW_DESC altSRVDesc = {};
 
   // for non-typeless depth formats, we need to copy to a typeless resource for read
-  if(IsDepthFormat(resourceDesc.Format) &&
-     GetTypelessFormat(resourceDesc.Format) != resourceDesc.Format)
+  if(IsDepthFormat(srvDesc.Format) && GetTypelessFormat(srvDesc.Format) != srvDesc.Format)
   {
     realResourceState = D3D12_RESOURCE_STATE_COPY_SOURCE;
     copy = true;
@@ -127,11 +126,11 @@ void D3D12DebugManager::PrepareTextureSampling(ID3D12Resource *resource, CompTyp
     }
   }
 
-  if(IsYUVFormat(resourceDesc.Format))
+  if(IsYUVFormat(srvDesc.Format))
   {
     altSRVDesc = srvDesc;
-    srvDesc.Format = GetYUVViewPlane0Format(resourceDesc.Format);
-    altSRVDesc.Format = GetYUVViewPlane1Format(resourceDesc.Format);
+    srvDesc.Format = GetYUVViewPlane0Format(srvDesc.Format);
+    altSRVDesc.Format = GetYUVViewPlane1Format(srvDesc.Format);
 
     // assume YUV textures are 2D or 2D arrays
     RDCASSERT(resourceDesc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D);
@@ -141,7 +140,7 @@ void D3D12DebugManager::PrepareTextureSampling(ID3D12Resource *resource, CompTyp
   }
 
   // even for non-copies, we need to make two SRVs to sample stencil as well
-  if(IsDepthAndStencilFormat(resourceDesc.Format) && altSRVDesc.Format == DXGI_FORMAT_UNKNOWN)
+  if(IsDepthAndStencilFormat(srvDesc.Format) && altSRVDesc.Format == DXGI_FORMAT_UNKNOWN)
   {
     switch(GetTypelessFormat(srvDesc.Format))
     {
@@ -159,7 +158,7 @@ void D3D12DebugManager::PrepareTextureSampling(ID3D12Resource *resource, CompTyp
     }
   }
 
-  if(altSRVDesc.Format != DXGI_FORMAT_UNKNOWN && !IsYUVFormat(resourceDesc.Format))
+  if(altSRVDesc.Format != DXGI_FORMAT_UNKNOWN && !IsYUVFormat(srvDesc.Format))
   {
     D3D12_FEATURE_DATA_FORMAT_INFO formatInfo = {};
     formatInfo.Format = srvDesc.Format;
@@ -307,7 +306,7 @@ void D3D12DebugManager::PrepareTextureSampling(ID3D12Resource *resource, CompTyp
   m_pDevice->CreateShaderResourceView(resource, &srvDesc, srv);
   if(altSRVDesc.Format != DXGI_FORMAT_UNKNOWN)
   {
-    if(IsYUVFormat(resourceDesc.Format))
+    if(IsYUVFormat(srvDesc.Format))
     {
       srv = GetCPUHandle(FIRST_TEXDISPLAY_SRV);
       // YUV second plane is in slot 10
@@ -450,14 +449,28 @@ bool D3D12Replay::RenderTextureInternal(D3D12_CPU_DESCRIPTOR_HANDLE rtv, Texture
 
   pixelData.MipLevel = (float)cfg.subresource.mip;
 
+  DXGI_FORMAT fmt = GetTypedFormat(resourceDesc.Format, cfg.typeCast);
+
   if(resourceDesc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D)
-    pixelData.Slice =
+  {
+    float slice =
         float(RDCCLAMP(cfg.subresource.slice, 0U,
-                       uint32_t((resourceDesc.DepthOrArraySize >> cfg.subresource.mip) - 1)) +
-              0.001f);
+                       uint32_t((resourceDesc.DepthOrArraySize >> cfg.subresource.mip) - 1)));
+
+    // when sampling linearly, we need to add half a pixel to ensure we only sample the desired
+    // slice
+    if(cfg.subresource.mip == 0 && cfg.scale < 1.0f && !IsUIntFormat(fmt) && !IsIntFormat(fmt))
+      slice += 0.5f;
+    else
+      slice += 0.001f;
+
+    pixelData.Slice = slice;
+  }
   else
+  {
     pixelData.Slice = float(
         RDCCLAMP(cfg.subresource.slice, 0U, uint32_t(resourceDesc.DepthOrArraySize - 1)) + 0.001f);
+  }
 
   rdcarray<D3D12_RESOURCE_BARRIER> barriers;
   int resType = 0;
@@ -470,8 +483,6 @@ bool D3D12Replay::RenderTextureInternal(D3D12_CPU_DESCRIPTOR_HANDLE rtv, Texture
 
   if(cfg.overlay == DebugOverlay::Clipping)
     pixelData.OutputDisplayFormat |= TEXDISPLAY_CLIPPING;
-
-  DXGI_FORMAT fmt = GetTypedFormat(resourceDesc.Format, cfg.typeCast);
 
   if(IsUIntFormat(fmt))
     pixelData.OutputDisplayFormat |= TEXDISPLAY_UINT_TEX;

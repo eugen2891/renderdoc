@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -230,6 +230,11 @@ HRESULT WrappedID3D12Device::CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE type
       record->type = Resource_CommandAllocator;
       record->Length = 0;
       wrapped->SetResourceRecord(record);
+
+      record->cmdInfo = new CmdListRecordingInfo;
+
+      record->cmdInfo->allocPool = new ChunkPagePool(32 * 1024);
+      record->cmdInfo->alloc = new ChunkAllocator(*record->cmdInfo->allocPool);
 
       record->AddChunk(scope.Get());
     }
@@ -516,6 +521,131 @@ bool WrappedID3D12Device::Serialise_CreateGraphicsPipelineState(
   return true;
 }
 
+void WrappedID3D12Device::ProcessCreatedGraphicsPSO(ID3D12PipelineState *real,
+                                                    uint32_t vendorExtReg, uint32_t vendorExtSpace,
+                                                    const D3D12_GRAPHICS_PIPELINE_STATE_DESC *pDesc,
+                                                    REFIID riid, void **ppPipelineState)
+{
+  for(const D3D12_SHADER_BYTECODE &sh : {pDesc->VS, pDesc->HS, pDesc->DS, pDesc->GS, pDesc->PS})
+  {
+    if(sh.BytecodeLength > 0 && sh.pShaderBytecode &&
+       DXBC::DXBCContainer::CheckForDXIL(sh.pShaderBytecode, sh.BytecodeLength))
+      m_UsedDXIL = true;
+  }
+
+  WrappedID3D12PipelineState *wrapped = new WrappedID3D12PipelineState(real, this);
+
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+
+    Chunk *vendorChunk = NULL;
+    if(m_VendorEXT != GPUVendor::Unknown)
+    {
+      if(UsesExtensionUAV(pDesc->VS, vendorExtReg, vendorExtSpace) ||
+         UsesExtensionUAV(pDesc->HS, vendorExtReg, vendorExtSpace) ||
+         UsesExtensionUAV(pDesc->DS, vendorExtReg, vendorExtSpace) ||
+         UsesExtensionUAV(pDesc->GS, vendorExtReg, vendorExtSpace) ||
+         UsesExtensionUAV(pDesc->PS, vendorExtReg, vendorExtSpace))
+      {
+        // don't set initparams until we've seen at least one shader actually created using the
+        // extensions.
+        m_InitParams.VendorExtensions = m_VendorEXT;
+
+        // if this shader uses the UAV slot registered for vendor extensions, serialise that out
+        // too
+        SCOPED_SERIALISE_CHUNK(D3D12Chunk::SetShaderExtUAV);
+        Serialise_SetShaderExtUAV(ser, m_VendorEXT, vendorExtReg, vendorExtSpace, true);
+        vendorChunk = scope.Get();
+      }
+    }
+
+    SCOPED_SERIALISE_CHUNK(D3D12Chunk::Device_CreateGraphicsPipeline);
+    Serialise_CreateGraphicsPipelineState(ser, pDesc, riid, (void **)&wrapped);
+
+    D3D12ResourceRecord *record = GetResourceManager()->AddResourceRecord(wrapped->GetResourceID());
+    record->type = Resource_PipelineState;
+    record->Length = 0;
+    wrapped->SetResourceRecord(record);
+
+    if(pDesc->pRootSignature)
+      record->AddParent(GetRecord(pDesc->pRootSignature));
+
+    if(vendorChunk)
+      record->AddChunk(vendorChunk);
+    record->AddChunk(scope.Get());
+  }
+  else
+  {
+    GetResourceManager()->AddLiveResource(wrapped->GetResourceID(), wrapped);
+
+    wrapped->graphics = new D3D12_EXPANDED_PIPELINE_STATE_STREAM_DESC(*pDesc);
+
+    D3D12_SHADER_BYTECODE *shaders[] = {
+        &wrapped->graphics->VS, &wrapped->graphics->HS, &wrapped->graphics->DS,
+        &wrapped->graphics->GS, &wrapped->graphics->PS,
+    };
+
+    for(size_t i = 0; i < ARRAY_COUNT(shaders); i++)
+    {
+      if(shaders[i]->BytecodeLength == 0 || shaders[i]->pShaderBytecode == NULL)
+      {
+        shaders[i]->pShaderBytecode = NULL;
+        shaders[i]->BytecodeLength = 0;
+      }
+      else
+      {
+        WrappedID3D12Shader *sh = WrappedID3D12Shader::AddShader(*shaders[i], this);
+        sh->AddRef();
+        if(m_GlobalEXTUAV != ~0U)
+          sh->SetShaderExtSlot(m_GlobalEXTUAV, m_GlobalEXTUAVSpace);
+        shaders[i]->pShaderBytecode = sh;
+      }
+    }
+
+    if(wrapped->graphics->InputLayout.NumElements)
+    {
+      wrapped->graphics->InputLayout.pInputElementDescs =
+          new D3D12_INPUT_ELEMENT_DESC[wrapped->graphics->InputLayout.NumElements];
+      memcpy((void *)wrapped->graphics->InputLayout.pInputElementDescs,
+             pDesc->InputLayout.pInputElementDescs,
+             sizeof(D3D12_INPUT_ELEMENT_DESC) * wrapped->graphics->InputLayout.NumElements);
+    }
+    else
+    {
+      wrapped->graphics->InputLayout.pInputElementDescs = NULL;
+    }
+
+    if(wrapped->graphics->StreamOutput.NumEntries)
+    {
+      wrapped->graphics->StreamOutput.pSODeclaration =
+          new D3D12_SO_DECLARATION_ENTRY[wrapped->graphics->StreamOutput.NumEntries];
+      memcpy((void *)wrapped->graphics->StreamOutput.pSODeclaration,
+             pDesc->StreamOutput.pSODeclaration,
+             sizeof(D3D12_SO_DECLARATION_ENTRY) * wrapped->graphics->StreamOutput.NumEntries);
+    }
+    else
+    {
+      wrapped->graphics->StreamOutput.pSODeclaration = NULL;
+    }
+
+    if(wrapped->graphics->StreamOutput.NumStrides)
+    {
+      wrapped->graphics->StreamOutput.pBufferStrides =
+          new UINT[wrapped->graphics->StreamOutput.NumStrides];
+      memcpy((void *)wrapped->graphics->StreamOutput.pBufferStrides,
+             pDesc->StreamOutput.pBufferStrides,
+             sizeof(UINT) * wrapped->graphics->StreamOutput.NumStrides);
+    }
+    else
+    {
+      wrapped->graphics->StreamOutput.pBufferStrides = NULL;
+    }
+  }
+
+  *ppPipelineState = (ID3D12PipelineState *)wrapped;
+}
+
 HRESULT WrappedID3D12Device::CreateGraphicsPipelineState(const D3D12_GRAPHICS_PIPELINE_STATE_DESC *pDesc,
                                                          REFIID riid, void **ppPipelineState)
 {
@@ -535,126 +665,12 @@ HRESULT WrappedID3D12Device::CreateGraphicsPipelineState(const D3D12_GRAPHICS_PI
 
   if(SUCCEEDED(ret))
   {
-    for(const D3D12_SHADER_BYTECODE &sh :
-        {unwrappedDesc.VS, unwrappedDesc.HS, unwrappedDesc.DS, unwrappedDesc.GS, unwrappedDesc.PS})
-    {
-      if(sh.BytecodeLength > 0 && sh.pShaderBytecode &&
-         DXBC::DXBCContainer::CheckForDXIL(sh.pShaderBytecode, sh.BytecodeLength))
-        m_UsedDXIL = true;
-    }
+    // use implicit register/space
+    uint32_t reg = ~0U, space = ~0U;
+    if(m_VendorEXT != GPUVendor::Unknown)
+      GetShaderExtUAV(reg, space);
 
-    WrappedID3D12PipelineState *wrapped = new WrappedID3D12PipelineState(real, this);
-
-    if(IsCaptureMode(m_State))
-    {
-      CACHE_THREAD_SERIALISER();
-
-      Chunk *vendorChunk = NULL;
-      if(m_VendorEXT != GPUVendor::Unknown)
-      {
-        uint32_t reg = ~0U, space = ~0U;
-        GetShaderExtUAV(reg, space);
-
-        if(UsesExtensionUAV(pDesc->VS, reg, space) || UsesExtensionUAV(pDesc->HS, reg, space) ||
-           UsesExtensionUAV(pDesc->DS, reg, space) || UsesExtensionUAV(pDesc->GS, reg, space) ||
-           UsesExtensionUAV(pDesc->PS, reg, space))
-        {
-          // don't set initparams until we've seen at least one shader actually created using the
-          // extensions.
-          m_InitParams.VendorExtensions = m_VendorEXT;
-
-          // if this shader uses the UAV slot registered for vendor extensions, serialise that out
-          // too
-          SCOPED_SERIALISE_CHUNK(D3D12Chunk::SetShaderExtUAV);
-          Serialise_SetShaderExtUAV(ser, m_VendorEXT, reg, space, true);
-          vendorChunk = scope.Get();
-        }
-      }
-
-      SCOPED_SERIALISE_CHUNK(D3D12Chunk::Device_CreateGraphicsPipeline);
-      Serialise_CreateGraphicsPipelineState(ser, pDesc, riid, (void **)&wrapped);
-
-      D3D12ResourceRecord *record = GetResourceManager()->AddResourceRecord(wrapped->GetResourceID());
-      record->type = Resource_PipelineState;
-      record->Length = 0;
-      wrapped->SetResourceRecord(record);
-
-      if(pDesc->pRootSignature)
-        record->AddParent(GetRecord(pDesc->pRootSignature));
-
-      if(vendorChunk)
-        record->AddChunk(vendorChunk);
-      record->AddChunk(scope.Get());
-    }
-    else
-    {
-      GetResourceManager()->AddLiveResource(wrapped->GetResourceID(), wrapped);
-
-      wrapped->graphics = new D3D12_EXPANDED_PIPELINE_STATE_STREAM_DESC(*pDesc);
-
-      D3D12_SHADER_BYTECODE *shaders[] = {
-          &wrapped->graphics->VS, &wrapped->graphics->HS, &wrapped->graphics->DS,
-          &wrapped->graphics->GS, &wrapped->graphics->PS,
-      };
-
-      for(size_t i = 0; i < ARRAY_COUNT(shaders); i++)
-      {
-        if(shaders[i]->BytecodeLength == 0 || shaders[i]->pShaderBytecode == NULL)
-        {
-          shaders[i]->pShaderBytecode = NULL;
-          shaders[i]->BytecodeLength = 0;
-        }
-        else
-        {
-          WrappedID3D12Shader *sh = WrappedID3D12Shader::AddShader(*shaders[i], this);
-          sh->AddRef();
-          if(m_GlobalEXTUAV != ~0U)
-            sh->SetShaderExtSlot(m_GlobalEXTUAV, m_GlobalEXTUAVSpace);
-          shaders[i]->pShaderBytecode = sh;
-        }
-      }
-
-      if(wrapped->graphics->InputLayout.NumElements)
-      {
-        wrapped->graphics->InputLayout.pInputElementDescs =
-            new D3D12_INPUT_ELEMENT_DESC[wrapped->graphics->InputLayout.NumElements];
-        memcpy((void *)wrapped->graphics->InputLayout.pInputElementDescs,
-               pDesc->InputLayout.pInputElementDescs,
-               sizeof(D3D12_INPUT_ELEMENT_DESC) * wrapped->graphics->InputLayout.NumElements);
-      }
-      else
-      {
-        wrapped->graphics->InputLayout.pInputElementDescs = NULL;
-      }
-
-      if(wrapped->graphics->StreamOutput.NumEntries)
-      {
-        wrapped->graphics->StreamOutput.pSODeclaration =
-            new D3D12_SO_DECLARATION_ENTRY[wrapped->graphics->StreamOutput.NumEntries];
-        memcpy((void *)wrapped->graphics->StreamOutput.pSODeclaration,
-               pDesc->StreamOutput.pSODeclaration,
-               sizeof(D3D12_SO_DECLARATION_ENTRY) * wrapped->graphics->StreamOutput.NumEntries);
-      }
-      else
-      {
-        wrapped->graphics->StreamOutput.pSODeclaration = NULL;
-      }
-
-      if(wrapped->graphics->StreamOutput.NumStrides)
-      {
-        wrapped->graphics->StreamOutput.pBufferStrides =
-            new UINT[wrapped->graphics->StreamOutput.NumStrides];
-        memcpy((void *)wrapped->graphics->StreamOutput.pBufferStrides,
-               pDesc->StreamOutput.pBufferStrides,
-               sizeof(UINT) * wrapped->graphics->StreamOutput.NumStrides);
-      }
-      else
-      {
-        wrapped->graphics->StreamOutput.pBufferStrides = NULL;
-      }
-    }
-
-    *ppPipelineState = (ID3D12PipelineState *)wrapped;
+    ProcessCreatedGraphicsPSO(real, reg, space, pDesc, riid, ppPipelineState);
   }
 
   return ret;
@@ -723,6 +739,66 @@ bool WrappedID3D12Device::Serialise_CreateComputePipelineState(
   return true;
 }
 
+void WrappedID3D12Device::ProcessCreatedComputePSO(ID3D12PipelineState *real, uint32_t vendorExtReg,
+                                                   uint32_t vendorExtSpace,
+                                                   const D3D12_COMPUTE_PIPELINE_STATE_DESC *pDesc,
+                                                   REFIID riid, void **ppPipelineState)
+{
+  if(DXBC::DXBCContainer::CheckForDXIL(pDesc->CS.pShaderBytecode, pDesc->CS.BytecodeLength))
+    m_UsedDXIL = true;
+
+  WrappedID3D12PipelineState *wrapped = new WrappedID3D12PipelineState(real, this);
+
+  if(IsCaptureMode(m_State))
+  {
+    CACHE_THREAD_SERIALISER();
+
+    Chunk *vendorChunk = NULL;
+    if(m_VendorEXT != GPUVendor::Unknown)
+    {
+      if(UsesExtensionUAV(pDesc->CS, vendorExtReg, vendorExtSpace))
+      {
+        // don't set initparams until we've seen at least one shader actually created using the
+        // extensions.
+        m_InitParams.VendorExtensions = m_VendorEXT;
+
+        // if this shader uses the UAV slot registered for vendor extensions, serialise that out
+        // too
+        SCOPED_SERIALISE_CHUNK(D3D12Chunk::SetShaderExtUAV);
+        Serialise_SetShaderExtUAV(ser, m_VendorEXT, vendorExtReg, vendorExtSpace, true);
+        vendorChunk = scope.Get();
+      }
+    }
+
+    SCOPED_SERIALISE_CHUNK(D3D12Chunk::Device_CreateComputePipeline);
+    Serialise_CreateComputePipelineState(ser, pDesc, riid, (void **)&wrapped);
+
+    D3D12ResourceRecord *record = GetResourceManager()->AddResourceRecord(wrapped->GetResourceID());
+    record->type = Resource_PipelineState;
+    record->Length = 0;
+    wrapped->SetResourceRecord(record);
+
+    if(pDesc->pRootSignature)
+      record->AddParent(GetRecord(pDesc->pRootSignature));
+
+    if(vendorChunk)
+      record->AddChunk(vendorChunk);
+    record->AddChunk(scope.Get());
+  }
+  else
+  {
+    GetResourceManager()->AddLiveResource(wrapped->GetResourceID(), wrapped);
+
+    wrapped->compute = new D3D12_EXPANDED_PIPELINE_STATE_STREAM_DESC(*pDesc);
+
+    WrappedID3D12Shader *sh = WrappedID3D12Shader::AddShader(wrapped->compute->CS, this);
+    sh->AddRef();
+    wrapped->compute->CS.pShaderBytecode = sh;
+  }
+
+  *ppPipelineState = (ID3D12PipelineState *)wrapped;
+}
+
 HRESULT WrappedID3D12Device::CreateComputePipelineState(const D3D12_COMPUTE_PIPELINE_STATE_DESC *pDesc,
                                                         REFIID riid, void **ppPipelineState)
 {
@@ -742,63 +818,12 @@ HRESULT WrappedID3D12Device::CreateComputePipelineState(const D3D12_COMPUTE_PIPE
 
   if(SUCCEEDED(ret))
   {
-    if(DXBC::DXBCContainer::CheckForDXIL(unwrappedDesc.CS.pShaderBytecode,
-                                         unwrappedDesc.CS.BytecodeLength))
-      m_UsedDXIL = true;
+    // use implicit register/space
+    uint32_t reg = ~0U, space = ~0U;
+    if(m_VendorEXT != GPUVendor::Unknown)
+      GetShaderExtUAV(reg, space);
 
-    WrappedID3D12PipelineState *wrapped = new WrappedID3D12PipelineState(real, this);
-
-    if(IsCaptureMode(m_State))
-    {
-      CACHE_THREAD_SERIALISER();
-
-      Chunk *vendorChunk = NULL;
-      if(m_VendorEXT != GPUVendor::Unknown)
-      {
-        uint32_t reg = ~0U, space = ~0U;
-        GetShaderExtUAV(reg, space);
-
-        if(UsesExtensionUAV(pDesc->CS, reg, space))
-        {
-          // don't set initparams until we've seen at least one shader actually created using the
-          // extensions.
-          m_InitParams.VendorExtensions = m_VendorEXT;
-
-          // if this shader uses the UAV slot registered for vendor extensions, serialise that out
-          // too
-          SCOPED_SERIALISE_CHUNK(D3D12Chunk::SetShaderExtUAV);
-          Serialise_SetShaderExtUAV(ser, m_VendorEXT, reg, space, true);
-          vendorChunk = scope.Get();
-        }
-      }
-
-      SCOPED_SERIALISE_CHUNK(D3D12Chunk::Device_CreateComputePipeline);
-      Serialise_CreateComputePipelineState(ser, pDesc, riid, (void **)&wrapped);
-
-      D3D12ResourceRecord *record = GetResourceManager()->AddResourceRecord(wrapped->GetResourceID());
-      record->type = Resource_PipelineState;
-      record->Length = 0;
-      wrapped->SetResourceRecord(record);
-
-      if(pDesc->pRootSignature)
-        record->AddParent(GetRecord(pDesc->pRootSignature));
-
-      if(vendorChunk)
-        record->AddChunk(vendorChunk);
-      record->AddChunk(scope.Get());
-    }
-    else
-    {
-      GetResourceManager()->AddLiveResource(wrapped->GetResourceID(), wrapped);
-
-      wrapped->compute = new D3D12_EXPANDED_PIPELINE_STATE_STREAM_DESC(*pDesc);
-
-      WrappedID3D12Shader *sh = WrappedID3D12Shader::AddShader(wrapped->compute->CS, this);
-      sh->AddRef();
-      wrapped->compute->CS.pShaderBytecode = sh;
-    }
-
-    *ppPipelineState = (ID3D12PipelineState *)wrapped;
+    ProcessCreatedComputePSO(real, reg, space, pDesc, riid, ppPipelineState);
   }
 
   return ret;
@@ -818,14 +843,16 @@ bool WrappedID3D12Device::Serialise_CreateDescriptorHeap(
 
   if(IsReplayingAndReading())
   {
+    D3D12_DESCRIPTOR_HEAP_DESC PatchedDesc = Descriptor;
+
     // inflate the heap so we can insert our own descriptors at the end
     // while patching, because DX12 has a stupid limitation to not be able
     // to set multiple descriptor heaps at once of the same type
-    if(Descriptor.Type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
+    if(PatchedDesc.Type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
     {
       if(m_D3D12Opts.ResourceBindingTier == D3D12_RESOURCE_BINDING_TIER_3 ||
-         Descriptor.NumDescriptors + 16 <= 1000000)
-        Descriptor.NumDescriptors += 16;
+         PatchedDesc.NumDescriptors + 16 <= 1000000)
+        PatchedDesc.NumDescriptors += 16;
       else
         RDCERR(
             "RenderDoc needs extra descriptors for patching during analysis,"
@@ -833,7 +860,7 @@ bool WrappedID3D12Device::Serialise_CreateDescriptorHeap(
     }
 
     ID3D12DescriptorHeap *ret = NULL;
-    HRESULT hr = m_pDevice->CreateDescriptorHeap(&Descriptor, guid, (void **)&ret);
+    HRESULT hr = m_pDevice->CreateDescriptorHeap(&PatchedDesc, guid, (void **)&ret);
 
     if(FAILED(hr))
     {
@@ -842,7 +869,7 @@ bool WrappedID3D12Device::Serialise_CreateDescriptorHeap(
     }
     else
     {
-      ret = new WrappedID3D12DescriptorHeap(ret, this, Descriptor);
+      ret = new WrappedID3D12DescriptorHeap(ret, this, PatchedDesc, Descriptor.NumDescriptors);
 
       GetResourceManager()->AddLiveResource(pHeap, ret);
 
@@ -869,8 +896,8 @@ HRESULT WrappedID3D12Device::CreateDescriptorHeap(const D3D12_DESCRIPTOR_HEAP_DE
 
   if(SUCCEEDED(ret))
   {
-    WrappedID3D12DescriptorHeap *wrapped =
-        new WrappedID3D12DescriptorHeap(real, this, *pDescriptorHeapDesc);
+    WrappedID3D12DescriptorHeap *wrapped = new WrappedID3D12DescriptorHeap(
+        real, this, *pDescriptorHeapDesc, pDescriptorHeapDesc->NumDescriptors);
 
     if(IsCaptureMode(m_State))
     {
@@ -1011,6 +1038,50 @@ HRESULT WrappedID3D12Device::CreateRootSignature(UINT nodeMask, const void *pBlo
       wrapped->SetResourceRecord(record);
 
       wrapped->sig = GetShaderCache()->GetRootSig(pBlobWithRootSignature, blobLengthInBytes);
+
+      bool forceRefAll = false;
+
+      // force ref-all-resources if the heap is directly indexed because we can't track resource
+      // access
+      if(wrapped->sig.Flags & (D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED |
+                               D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED))
+      {
+        forceRefAll = true;
+        RDCDEBUG("Forcing Ref All Resources due to heap-indexing root signature flags");
+      }
+      else
+      {
+        for(const D3D12RootSignatureParameter &param : wrapped->sig.Parameters)
+        {
+          if(param.ParameterType != D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE)
+            continue;
+
+          for(UINT r = 0; r < param.DescriptorTable.NumDescriptorRanges; r++)
+          {
+            const D3D12_DESCRIPTOR_RANGE1 &range = param.DescriptorTable.pDescriptorRanges[r];
+            if(range.NumDescriptors > 100000)
+            {
+              forceRefAll = true;
+              RDCDEBUG(
+                  "Forcing Ref All Resources due to large root signature range of %u descriptors "
+                  "(space=%u, reg=%u, visibility=%s)",
+                  range.NumDescriptors, range.RegisterSpace, range.BaseShaderRegister,
+                  ToStr(param.ShaderVisibility).c_str());
+              break;
+            }
+          }
+
+          if(forceRefAll)
+            break;
+        }
+      }
+
+      if(forceRefAll)
+      {
+        CaptureOptions opts = RenderDoc::Inst().GetCaptureOptions();
+        opts.refAllResources = true;
+        RenderDoc::Inst().SetCaptureOptions(opts);
+      }
 
       record->AddChunk(scope.Get());
     }
@@ -1817,8 +1888,102 @@ bool WrappedID3D12Device::Serialise_CreateReservedResource(
     SerialiserType &ser, const D3D12_RESOURCE_DESC *pDesc, D3D12_RESOURCE_STATES InitialState,
     const D3D12_CLEAR_VALUE *pOptimizedClearValue, REFIID riid, void **ppvResource)
 {
-  D3D12NOTIMP("Tiled Resources");
-  APIProps.SparseResources = true;
+  SERIALISE_ELEMENT_LOCAL(Descriptor, *pDesc).Named("pDesc"_lit);
+  SERIALISE_ELEMENT(InitialState);
+  SERIALISE_ELEMENT_OPT(pOptimizedClearValue);
+  SERIALISE_ELEMENT_LOCAL(guid, riid).Named("riid"_lit);
+  SERIALISE_ELEMENT_LOCAL(pResource, ((WrappedID3D12Resource *)*ppvResource)->GetResourceID())
+      .TypedAs("ID3D12Resource *"_lit);
+
+  SERIALISE_ELEMENT_LOCAL(gpuAddress,
+                          ((WrappedID3D12Resource *)*ppvResource)->GetGPUVirtualAddressIfBuffer())
+      .Hidden();
+
+  SERIALISE_CHECK_READ_ERRORS();
+
+  if(IsReplayingAndReading())
+  {
+    APIProps.SparseResources = true;
+
+    if(Descriptor.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER)
+    {
+      GPUAddressRange range;
+      range.start = gpuAddress;
+      range.end = gpuAddress + Descriptor.Width;
+      range.id = pResource;
+
+      m_GPUAddresses.AddTo(range);
+    }
+
+    APIProps.YUVTextures |= IsYUVFormat(Descriptor.Format);
+
+    // always allow SRVs on replay so we can inspect resources
+    Descriptor.Flags &= ~D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE;
+
+    ID3D12Resource *ret = NULL;
+    HRESULT hr = m_pDevice->CreateReservedResource(&Descriptor, InitialState, pOptimizedClearValue,
+                                                   guid, (void **)&ret);
+
+    if(FAILED(hr))
+    {
+      RDCERR("Failed on resource serialise-creation, HRESULT: %s", ToStr(hr).c_str());
+      return false;
+    }
+    else
+    {
+      SetObjName(ret,
+                 StringFormat::Fmt("Reserved Resource %s %s", ToStr(Descriptor.Dimension).c_str(),
+                                   ToStr(pResource).c_str()));
+
+      ret = new WrappedID3D12Resource(ret, this);
+
+      GetResourceManager()->AddLiveResource(pResource, ret);
+
+      SubresourceStateVector &states = m_ResourceStates[GetResID(ret)];
+      states.fill(GetNumSubresources(m_pDevice, &Descriptor), InitialState);
+    }
+
+    m_SparseResources.insert(GetResID(ret));
+
+    ResourceType type = ResourceType::Texture;
+    const char *prefix = "Texture";
+
+    if(Descriptor.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER)
+    {
+      type = ResourceType::Buffer;
+      prefix = "Buffer";
+    }
+    else if(Descriptor.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE1D)
+    {
+      prefix = Descriptor.DepthOrArraySize > 1 ? "1D TextureArray" : "1D Texture";
+
+      if(Descriptor.Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)
+        prefix = "1D Render Target";
+      else if(Descriptor.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)
+        prefix = "1D Depth Target";
+    }
+    else if(Descriptor.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D)
+    {
+      prefix = Descriptor.DepthOrArraySize > 1 ? "2D TextureArray" : "2D Texture";
+
+      if(Descriptor.Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)
+        prefix = "2D Render Target";
+      else if(Descriptor.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)
+        prefix = "2D Depth Target";
+    }
+    else if(Descriptor.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D)
+    {
+      prefix = "3D Texture";
+
+      if(Descriptor.Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)
+        prefix = "3D Render Target";
+      else if(Descriptor.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)
+        prefix = "3D Depth Target";
+    }
+
+    AddResource(pResource, type, prefix);
+  }
+
   return true;
 }
 
@@ -1827,8 +1992,125 @@ HRESULT WrappedID3D12Device::CreateReservedResource(const D3D12_RESOURCE_DESC *p
                                                     const D3D12_CLEAR_VALUE *pOptimizedClearValue,
                                                     REFIID riid, void **ppvResource)
 {
-  RDCERR("Tiled Resources are not currently implemented on D3D12");
-  return E_NOINTERFACE;
+  if(ppvResource == NULL)
+    return m_pDevice->CreateReservedResource(pDesc, InitialState, pOptimizedClearValue, riid, NULL);
+
+  if(riid != __uuidof(ID3D12Resource) && riid != __uuidof(ID3D12Resource1) &&
+     riid != __uuidof(ID3D12Resource2))
+    return E_NOINTERFACE;
+
+  const D3D12_RESOURCE_DESC *pCreateDesc = pDesc;
+  D3D12_RESOURCE_DESC localDesc;
+
+  if(pDesc && pDesc->Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D && pDesc->SampleDesc.Count > 1)
+  {
+    localDesc = *pDesc;
+    // need to be able to create SRVs of MSAA textures to copy out their contents
+    localDesc.Flags &= ~D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE;
+    pCreateDesc = &localDesc;
+  }
+
+  ID3D12Resource *real = NULL;
+  HRESULT ret;
+  SERIALISE_TIME_CALL(
+      ret = m_pDevice->CreateReservedResource(pCreateDesc, InitialState, pOptimizedClearValue,
+                                              __uuidof(ID3D12Resource), (void **)&real));
+
+  if(SUCCEEDED(ret))
+  {
+    WrappedID3D12Resource *wrapped = new WrappedID3D12Resource(real, this);
+
+    if(IsCaptureMode(m_State))
+    {
+      CACHE_THREAD_SERIALISER();
+
+      SCOPED_SERIALISE_CHUNK(D3D12Chunk::Device_CreateReservedResource);
+      Serialise_CreateReservedResource(ser, pDesc, InitialState, pOptimizedClearValue, riid,
+                                       (void **)&wrapped);
+
+      D3D12ResourceRecord *record = GetResourceManager()->AddResourceRecord(wrapped->GetResourceID());
+      record->type = Resource_Resource;
+      record->Length = 0;
+      wrapped->SetResourceRecord(record);
+
+      record->m_MapsCount = GetNumSubresources(this, pDesc);
+      record->m_Maps = new D3D12ResourceRecord::MapData[record->m_MapsCount];
+
+      const UINT pageSize = 64 * 1024;
+
+      if(pDesc->Dimension == D3D12_RESOURCE_DIMENSION_BUFFER)
+      {
+        record->sparseTable = new Sparse::PageTable;
+        record->sparseTable->Initialise(pDesc->Width, pageSize);
+      }
+      else
+      {
+        D3D12_PACKED_MIP_INFO mipTail = {};
+        D3D12_TILE_SHAPE tileShape = {};
+
+        m_pDevice->GetResourceTiling(wrapped->GetReal(), NULL, &mipTail, &tileShape, NULL, 0, NULL);
+
+        UINT texDepth = 1;
+        UINT texSlices = pDesc->DepthOrArraySize;
+        if(pDesc->Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D)
+        {
+          texDepth = pDesc->DepthOrArraySize;
+          texSlices = 1;
+        }
+
+        RDCASSERT(mipTail.NumStandardMips + mipTail.NumPackedMips == pDesc->MipLevels,
+                  mipTail.NumStandardMips, mipTail.NumPackedMips, pDesc->MipLevels);
+        record->sparseTable = new Sparse::PageTable;
+        record->sparseTable->Initialise(
+            {(uint32_t)pDesc->Width, pDesc->Height, texDepth}, pDesc->MipLevels, texSlices,
+            pageSize, {tileShape.WidthInTexels, tileShape.HeightInTexels, tileShape.DepthInTexels},
+            mipTail.NumStandardMips, mipTail.StartTileIndexInOverallResource * pageSize,
+            (mipTail.StartTileIndexInOverallResource + mipTail.NumTilesForPackedMips) * pageSize,
+            mipTail.NumTilesForPackedMips * pageSize * texSlices);
+      }
+
+      {
+        SCOPED_LOCK(m_SparseLock);
+        m_SparseResources.insert(wrapped->GetResourceID());
+      }
+
+      record->AddChunk(scope.Get());
+
+      GetResourceManager()->MarkDirtyResource(wrapped->GetResourceID());
+    }
+    else
+    {
+      GetResourceManager()->AddLiveResource(wrapped->GetResourceID(), wrapped);
+    }
+
+    {
+      SCOPED_LOCK(m_ResourceStatesLock);
+      SubresourceStateVector &states = m_ResourceStates[wrapped->GetResourceID()];
+
+      states.fill(GetNumSubresources(m_pDevice, pDesc), InitialState);
+    }
+
+    if(riid == __uuidof(ID3D12Resource))
+      *ppvResource = (ID3D12Resource *)wrapped;
+    else if(riid == __uuidof(ID3D12Resource1))
+      *ppvResource = (ID3D12Resource1 *)wrapped;
+    else if(riid == __uuidof(ID3D12Resource2))
+      *ppvResource = (ID3D12Resource2 *)wrapped;
+
+    // while actively capturing we keep all buffers around to prevent the address lookup from
+    // losing addresses we might need (or the manageable but annoying problem of an address being
+    // re-used)
+    {
+      SCOPED_READLOCK(m_CapTransitionLock);
+      if(IsActiveCapturing(m_State))
+      {
+        wrapped->AddRef();
+        m_RefBuffers.push_back(wrapped);
+      }
+    }
+  }
+
+  return ret;
 }
 
 template <typename SerialiserType>
@@ -1915,7 +2197,10 @@ HRESULT WrappedID3D12Device::CreateFence(UINT64 InitialValue, D3D12_FENCE_FLAGS 
       GetResourceManager()->AddLiveResource(wrapped->GetResourceID(), wrapped);
     }
 
-    *ppFence = (ID3D12Fence *)wrapped;
+    if(riid == __uuidof(ID3D12Fence))
+      *ppFence = (ID3D12Fence *)wrapped;
+    else if(riid == __uuidof(ID3D12Fence1))
+      *ppFence = (ID3D12Fence1 *)wrapped;
   }
 
   return ret;
@@ -2955,26 +3240,7 @@ HRESULT WrappedID3D12Device::CheckFeatureSupport(D3D12_FEATURE Feature, void *pF
 
     return hr;
   }
-  else if(Feature == D3D12_FEATURE_D3D12_OPTIONS)
-  {
-    HRESULT hr = m_pDevice->CheckFeatureSupport(Feature, pFeatureSupportData, FeatureSupportDataSize);
 
-    if(SUCCEEDED(hr))
-    {
-      D3D12_FEATURE_DATA_D3D12_OPTIONS *opts =
-          (D3D12_FEATURE_DATA_D3D12_OPTIONS *)pFeatureSupportData;
-      if(FeatureSupportDataSize != sizeof(D3D12_FEATURE_DATA_D3D12_OPTIONS))
-        return E_INVALIDARG;
-
-      // renderdoc doesn't support tiled resources (calls to CreateReservedResource will fail), so
-      // don't report it as supported
-      opts->TiledResourcesTier = D3D12_TILED_RESOURCES_TIER_NOT_SUPPORTED;
-
-      return S_OK;
-    }
-
-    return hr;
-  }
   return m_pDevice->CheckFeatureSupport(Feature, pFeatureSupportData, FeatureSupportDataSize);
 }
 

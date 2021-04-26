@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -224,6 +224,8 @@ D3D11PipelineStateViewer::D3D11PipelineStateViewer(ICaptureContext &ctx,
     ui->iaBuffers->setClearSelectionOnFocusLoss(true);
     ui->iaBuffers->setInstantTooltips(true);
     ui->iaBuffers->setHoverIconColumn(5, action, action_hover);
+
+    m_Common.SetupResourceView(ui->iaBuffers);
   }
 
   for(RDTreeWidget *tex : resources)
@@ -238,6 +240,8 @@ D3D11PipelineStateViewer::D3D11PipelineStateViewer(ICaptureContext &ctx,
     tex->setHoverIconColumn(8, action, action_hover);
     tex->setClearSelectionOnFocusLoss(true);
     tex->setInstantTooltips(true);
+
+    m_Common.SetupResourceView(tex);
   }
 
   for(RDTreeWidget *samp : samplers)
@@ -251,6 +255,8 @@ D3D11PipelineStateViewer::D3D11PipelineStateViewer(ICaptureContext &ctx,
 
     samp->setClearSelectionOnFocusLoss(true);
     samp->setInstantTooltips(true);
+
+    m_Common.SetupResourceView(samp);
   }
 
   for(RDTreeWidget *cbuffer : cbuffers)
@@ -264,6 +270,8 @@ D3D11PipelineStateViewer::D3D11PipelineStateViewer(ICaptureContext &ctx,
     cbuffer->setHoverIconColumn(4, action, action_hover);
     cbuffer->setClearSelectionOnFocusLoss(true);
     cbuffer->setInstantTooltips(true);
+
+    m_Common.SetupResourceView(cbuffer);
   }
 
   for(RDTreeWidget *cl : classes)
@@ -276,6 +284,8 @@ D3D11PipelineStateViewer::D3D11PipelineStateViewer(ICaptureContext &ctx,
 
     cl->setClearSelectionOnFocusLoss(true);
     cl->setInstantTooltips(true);
+
+    m_Common.SetupResourceView(cl);
   }
 
   {
@@ -290,6 +300,8 @@ D3D11PipelineStateViewer::D3D11PipelineStateViewer(ICaptureContext &ctx,
     ui->gsStreamOut->setHoverIconColumn(4, action, action_hover);
     ui->gsStreamOut->setClearSelectionOnFocusLoss(true);
     ui->gsStreamOut->setInstantTooltips(true);
+
+    m_Common.SetupResourceView(ui->gsStreamOut);
   }
 
   {
@@ -329,6 +341,8 @@ D3D11PipelineStateViewer::D3D11PipelineStateViewer(ICaptureContext &ctx,
     ui->targetOutputs->setHoverIconColumn(8, action, action_hover);
     ui->targetOutputs->setClearSelectionOnFocusLoss(true);
     ui->targetOutputs->setInstantTooltips(true);
+
+    m_Common.SetupResourceView(ui->targetOutputs);
   }
 
   {
@@ -367,6 +381,8 @@ D3D11PipelineStateViewer::D3D11PipelineStateViewer(ICaptureContext &ctx,
     ui->csUAVs->setHoverIconColumn(8, action, action_hover);
     ui->csUAVs->setClearSelectionOnFocusLoss(true);
     ui->csUAVs->setInstantTooltips(true);
+
+    m_Common.SetupResourceView(ui->csUAVs);
   }
 
   // this is often changed just because we're changing some tab in the designer.
@@ -469,7 +485,70 @@ void D3D11PipelineStateViewer::OnEventChanged(uint32_t eventId)
 
 void D3D11PipelineStateViewer::SelectPipelineStage(PipelineStage stage)
 {
-  ui->pipeFlow->setSelectedStage((int)stage);
+  if(stage == PipelineStage::SampleMask)
+    ui->pipeFlow->setSelectedStage((int)PipelineStage::ColorDepthOutput);
+  else
+    ui->pipeFlow->setSelectedStage((int)stage);
+}
+
+ResourceId D3D11PipelineStateViewer::GetResource(RDTreeWidgetItem *item)
+{
+  QVariant tag = item->tag();
+
+  const rdcarray<RDTreeWidget *> cbuffers = {
+      ui->vsCBuffers, ui->hsCBuffers, ui->dsCBuffers,
+      ui->gsCBuffers, ui->psCBuffers, ui->csCBuffers,
+  };
+
+  if(tag.canConvert<ResourceId>())
+  {
+    return tag.value<ResourceId>();
+  }
+  else if(tag.canConvert<D3D11ViewTag>())
+  {
+    D3D11ViewTag viewTag = tag.value<D3D11ViewTag>();
+    return viewTag.res.resourceResourceId;
+  }
+  else if(tag.canConvert<D3D11VBIBTag>())
+  {
+    D3D11VBIBTag buf = tag.value<D3D11VBIBTag>();
+    return buf.id;
+  }
+  else if(cbuffers.contains(item->treeWidget()))
+  {
+    const D3D11Pipe::Shader *stage = stageForSender(item->treeWidget());
+
+    if(stage == NULL)
+      return ResourceId();
+
+    int cb = tag.value<int>();
+
+    int cbufIdx = -1;
+
+    for(int i = 0; i < stage->bindpointMapping.constantBlocks.count(); i++)
+    {
+      if(stage->bindpointMapping.constantBlocks[i].bind == cb)
+      {
+        cbufIdx = i;
+        break;
+      }
+    }
+
+    if(cbufIdx == -1)
+    {
+      // unused cbuffer, open regular buffer viewer
+      if(cb >= stage->constantBuffers.count())
+        return ResourceId();
+
+      const D3D11Pipe::ConstantBuffer &bind = stage->constantBuffers[cb];
+
+      return bind.resourceId;
+    }
+
+    return m_Ctx.CurPipelineState().GetConstantBuffer(stage->stage, cbufIdx, 0).resourceId;
+  }
+
+  return ResourceId();
 }
 
 void D3D11PipelineStateViewer::on_showUnused_toggled(bool checked)
@@ -1353,19 +1432,17 @@ void D3D11PipelineStateViewer::setState()
   ui->iaLayouts->endUpdate();
   ui->iaLayouts->verticalScrollBar()->setValue(vs);
 
-  Topology topo = draw ? draw->topology : Topology::Unknown;
-
-  int numCPs = PatchList_Count(topo);
+  int numCPs = PatchList_Count(state.inputAssembly.topology);
   if(numCPs > 0)
   {
     ui->topology->setText(tr("PatchList (%1 Control Points)").arg(numCPs));
   }
   else
   {
-    ui->topology->setText(ToQStr(topo));
+    ui->topology->setText(ToQStr(state.inputAssembly.topology));
   }
 
-  m_Common.setTopologyDiagram(ui->topologyDiagram, topo);
+  m_Common.setTopologyDiagram(ui->topologyDiagram, state.inputAssembly.topology);
 
   bool ibufferUsed = draw && (draw->flags & DrawFlags::Indexed);
 
@@ -1388,27 +1465,27 @@ void D3D11PipelineStateViewer::setState()
         length = buf->length;
 
       RDTreeWidgetItem *node = new RDTreeWidgetItem(
-          {tr("Index"), state.inputAssembly.indexBuffer.resourceId, draw ? draw->indexByteWidth : 0,
-           state.inputAssembly.indexBuffer.byteOffset, (qulonglong)length, QString()});
+          {tr("Index"), state.inputAssembly.indexBuffer.resourceId,
+           state.inputAssembly.indexBuffer.byteStride, state.inputAssembly.indexBuffer.byteOffset,
+           (qulonglong)length, QString()});
 
       QString iformat;
-      if(draw)
-      {
-        if(draw->indexByteWidth == 1)
-          iformat = lit("ubyte");
-        else if(draw->indexByteWidth == 2)
-          iformat = lit("ushort");
-        else if(draw->indexByteWidth == 4)
-          iformat = lit("uint");
 
-        iformat += lit(" indices[%1]").arg(RENDERDOC_NumVerticesPerPrimitive(draw->topology));
-      }
+      if(state.inputAssembly.indexBuffer.byteStride == 1)
+        iformat = lit("ubyte");
+      else if(state.inputAssembly.indexBuffer.byteStride == 2)
+        iformat = lit("ushort");
+      else if(state.inputAssembly.indexBuffer.byteStride == 4)
+        iformat = lit("uint");
 
-      node->setTag(
-          QVariant::fromValue(D3D11VBIBTag(state.inputAssembly.indexBuffer.resourceId,
-                                           state.inputAssembly.indexBuffer.byteOffset +
-                                               (draw ? draw->indexOffset * draw->indexByteWidth : 0),
-                                           iformat)));
+      iformat +=
+          lit(" indices[%1]").arg(RENDERDOC_NumVerticesPerPrimitive(state.inputAssembly.topology));
+
+      node->setTag(QVariant::fromValue(D3D11VBIBTag(
+          state.inputAssembly.indexBuffer.resourceId,
+          state.inputAssembly.indexBuffer.byteOffset +
+              (draw ? draw->indexOffset * state.inputAssembly.indexBuffer.byteStride : 0),
+          iformat)));
 
       if(!ibufferUsed)
         setInactiveRow(node);
@@ -1430,23 +1507,22 @@ void D3D11PipelineStateViewer::setState()
           {tr("Index"), tr("No Buffer Set"), lit("-"), lit("-"), lit("-"), QString()});
 
       QString iformat;
-      if(draw)
-      {
-        if(draw->indexByteWidth == 1)
-          iformat = lit("ubyte");
-        else if(draw->indexByteWidth == 2)
-          iformat = lit("ushort");
-        else if(draw->indexByteWidth == 4)
-          iformat = lit("uint");
 
-        iformat += lit(" indices[%1]").arg(RENDERDOC_NumVerticesPerPrimitive(draw->topology));
-      }
+      if(state.inputAssembly.indexBuffer.byteStride == 1)
+        iformat = lit("ubyte");
+      else if(state.inputAssembly.indexBuffer.byteStride == 2)
+        iformat = lit("ushort");
+      else if(state.inputAssembly.indexBuffer.byteStride == 4)
+        iformat = lit("uint");
 
-      node->setTag(
-          QVariant::fromValue(D3D11VBIBTag(state.inputAssembly.indexBuffer.resourceId,
-                                           state.inputAssembly.indexBuffer.byteOffset +
-                                               (draw ? draw->indexOffset * draw->indexByteWidth : 0),
-                                           iformat)));
+      iformat +=
+          lit(" indices[%1]").arg(RENDERDOC_NumVerticesPerPrimitive(state.inputAssembly.topology));
+
+      node->setTag(QVariant::fromValue(D3D11VBIBTag(
+          state.inputAssembly.indexBuffer.resourceId,
+          state.inputAssembly.indexBuffer.byteOffset +
+              (draw ? draw->indexOffset * state.inputAssembly.indexBuffer.byteStride : 0),
+          iformat)));
 
       setEmptyRow(node);
       m_EmptyNodes.push_back(node);
@@ -2534,13 +2610,10 @@ void D3D11PipelineStateViewer::exportHTML(QXmlStreamWriter &xml, const D3D11Pipe
     }
 
     QString ifmt = lit("UNKNOWN");
-    if(draw)
-    {
-      if(draw->indexByteWidth == 2)
-        ifmt = lit("R16_UINT");
-      if(draw->indexByteWidth == 4)
-        ifmt = lit("R32_UINT");
-    }
+    if(ia.indexBuffer.byteStride == 2)
+      ifmt = lit("R16_UINT");
+    if(ia.indexBuffer.byteStride == 4)
+      ifmt = lit("R32_UINT");
 
     m_Common.exportHTMLTable(xml, {tr("Buffer"), tr("Format"), tr("Offset"), tr("Byte Length")},
                              {name, ifmt, ia.indexBuffer.byteOffset, (qulonglong)length});
@@ -2549,8 +2622,7 @@ void D3D11PipelineStateViewer::exportHTML(QXmlStreamWriter &xml, const D3D11Pipe
   xml.writeStartElement(lit("p"));
   xml.writeEndElement();
 
-  m_Common.exportHTMLTable(xml, {tr("Primitive Topology")},
-                           {ToQStr(draw ? draw->topology : Topology::Unknown)});
+  m_Common.exportHTMLTable(xml, {tr("Primitive Topology")}, {ToQStr(ia.topology)});
 }
 
 void D3D11PipelineStateViewer::exportHTML(QXmlStreamWriter &xml, const D3D11Pipe::Shader &sh)
@@ -3151,8 +3223,8 @@ void D3D11PipelineStateViewer::on_debugThread_clicked()
 
   struct threadSelect
   {
-    uint32_t g[3];
-    uint32_t t[3];
+    rdcfixedarray<uint32_t, 3> g;
+    rdcfixedarray<uint32_t, 3> t;
   } thread = {
       // g[]
       {(uint32_t)ui->groupX->value(), (uint32_t)ui->groupY->value(), (uint32_t)ui->groupZ->value()},

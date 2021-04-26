@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -464,6 +464,9 @@ struct BufferConfiguration
   uint32_t numRows = 0, unclampedNumRows = 0;
   uint32_t pagingOffset = 0;
 
+  bool noVertices = false;
+  bool noInstances = false;
+
   // we can have two index buffers for VSOut data:
   // the original index buffer is used for the displayed value (in displayIndices), and the actual
   // potentially remapped or permuated index buffer used for fetching data (in indices).
@@ -491,6 +494,9 @@ struct BufferConfiguration
     numRows = o.numRows;
     unclampedNumRows = o.unclampedNumRows;
     pagingOffset = o.pagingOffset;
+
+    noVertices = o.noVertices;
+    noInstances = o.noInstances;
 
     displayIndices = o.displayIndices;
     if(displayIndices)
@@ -536,6 +542,9 @@ struct BufferConfiguration
     genericsEnabled.clear();
     numRows = 0;
     unclampedNumRows = 0;
+
+    noVertices = false;
+    noInstances = false;
   }
 
   QString columnName(int col) const
@@ -795,6 +804,15 @@ public:
     int ret = config.numRows;
     if(config.pagingOffset > 0)
       ret++;
+
+    if(ret == 0)
+    {
+      if(config.noVertices)
+        ret++;
+      if(config.noInstances)
+        ret++;
+    }
+
     return ret;
   }
   int columnCount(const QModelIndex &parent = QModelIndex()) const override
@@ -1000,6 +1018,31 @@ public:
 
       if(role == Qt::DisplayRole)
       {
+        if(config.numRows == 0 && (config.noInstances || config.noVertices))
+        {
+          if(col < 2)
+            return lit("---");
+
+          if(col != 2)
+            return QVariant();
+
+          if(config.noVertices && config.noInstances)
+          {
+            if(row == 0)
+              return lit("No Vertices");
+            else
+              return lit("No Instances");
+          }
+          else if(config.noVertices)
+          {
+            return lit("No Vertices");
+          }
+          else if(config.noInstances)
+          {
+            return lit("No Instances");
+          }
+        }
+
         if(config.unclampedNumRows > config.pagingOffset + config.numRows && row >= config.numRows - 2)
         {
           if(meshView)
@@ -1092,7 +1135,7 @@ public:
                   v = ToQStr(ptr);
                 }
 
-                RichResourceTextInitialise(v);
+                RichResourceTextInitialise(v, getCaptureContext(view));
 
                 if(RichResourceTextCheck(v))
                   return v;
@@ -1413,7 +1456,7 @@ static void ConfigureColumnsForShader(ICaptureContext &ctx, const ShaderReflecti
     p.instancerate = 1;
     p.systemValue = sig.systemValue;
     p.format.type = ResourceFormatType::Regular;
-    p.format.compByteWidth = sizeof(float);
+    p.format.compByteWidth = qMax<uint32_t>(sizeof(float), VarTypeByteSize(sig.varType));
     p.format.compCount = sig.compCount;
     p.format.compType = VarTypeCompType(sig.varType);
 
@@ -1507,6 +1550,9 @@ static void ConfigureMeshColumns(ICaptureContext &ctx, PopulateBufferData *bufda
   bufdata->vsinConfig.numRows = 0;
   bufdata->vsinConfig.unclampedNumRows = 0;
 
+  bufdata->vsinConfig.noVertices = false;
+  bufdata->vsinConfig.noInstances = false;
+
   if(draw)
   {
     bufdata->vsinConfig.numRows = draw->numIndices;
@@ -1529,7 +1575,7 @@ static void ConfigureMeshColumns(ICaptureContext &ctx, PopulateBufferData *bufda
         BufferDescription *buf = ctx.GetBuffer(ib.resourceId);
         if(buf)
         {
-          uint64_t offset = ib.byteOffset + draw->indexOffset * draw->indexByteWidth;
+          uint64_t offset = ib.byteOffset + draw->indexOffset * ib.byteStride;
           if(offset > buf->length)
             bytesAvailable = 0;
           else
@@ -1543,7 +1589,7 @@ static void ConfigureMeshColumns(ICaptureContext &ctx, PopulateBufferData *bufda
 
       // drawing more than this many indices will read off the end of the index buffer - which while
       // technically not invalid is certainly not intended, so serves as a good 'upper bound'
-      numRowsUpperBound = bytesAvailable / qMax(1U, draw->indexByteWidth);
+      numRowsUpperBound = bytesAvailable / qMax(1U, ib.byteStride);
     }
     else
     {
@@ -1587,6 +1633,15 @@ static void ConfigureMeshColumns(ICaptureContext &ctx, PopulateBufferData *bufda
       bufdata->vsinConfig.unclampedNumRows = bufdata->vsinConfig.numRows;
       bufdata->vsinConfig.numRows = numRowsUpperBound + 100;
     }
+
+    if((draw->flags & DrawFlags::Drawcall) && draw->numIndices == 0)
+      bufdata->vsinConfig.noVertices = true;
+
+    if((draw->flags & DrawFlags::Instanced) && draw->numInstances == 0)
+    {
+      bufdata->vsinConfig.noInstances = true;
+      bufdata->vsinConfig.numRows = bufdata->vsinConfig.unclampedNumRows = 0;
+    }
   }
 
   bufdata->vsoutConfig.columns.clear();
@@ -1614,11 +1669,13 @@ static void RT_FetchMeshData(IReplayController *r, ICaptureContext &ctx, Populat
 
   rdcarray<BoundVBuffer> vbs = ctx.CurPipelineState().GetVBuffers();
 
+  uint32_t numIndices = draw ? draw->numIndices : 0;
+
   bytebuf idata;
   if(ib.resourceId != ResourceId() && draw && (draw->flags & DrawFlags::Indexed))
   {
-    uint64_t readBytes = draw->numIndices * draw->indexByteWidth;
-    uint32_t offset = draw->indexOffset * draw->indexByteWidth;
+    uint64_t readBytes = numIndices * ib.byteStride;
+    uint32_t offset = draw->indexOffset * ib.byteStride;
 
     if(ib.byteSize > offset)
       readBytes = qMin(ib.byteSize - offset, readBytes);
@@ -1634,9 +1691,9 @@ static void RT_FetchMeshData(IReplayController *r, ICaptureContext &ctx, Populat
 
   data->vsinConfig.indices = new BufferData();
 
-  if(draw && draw->indexByteWidth != 0 && !idata.isEmpty())
+  if(draw && ib.byteStride != 0 && !idata.isEmpty())
     data->vsinConfig.indices->storage.resize(
-        sizeof(uint32_t) * qMin(draw->numIndices, ((uint32_t)idata.size() / draw->indexByteWidth)));
+        sizeof(uint32_t) * qMin(numIndices, ((uint32_t)idata.size() / ib.byteStride)));
   else if(draw && (draw->flags & DrawFlags::Indexed))
     data->vsinConfig.indices->storage.resize(sizeof(uint32_t));
 
@@ -1644,16 +1701,16 @@ static void RT_FetchMeshData(IReplayController *r, ICaptureContext &ctx, Populat
 
   uint32_t maxIndex = 0;
   if(draw)
-    maxIndex = qMax(1U, draw->numIndices) - 1;
+    maxIndex = qMax(1U, numIndices) - 1;
 
   if(draw && !idata.isEmpty())
   {
     maxIndex = 0;
-    if(draw->indexByteWidth == 1)
+    if(ib.byteStride == 1)
     {
       uint8_t primRestart = data->vsinConfig.primRestart & 0xff;
 
-      for(size_t i = 0; i < idata.size() && (uint32_t)i < draw->numIndices; i++)
+      for(size_t i = 0; i < idata.size() && (uint32_t)i < numIndices; i++)
       {
         indices[i] = (uint32_t)idata[i];
         if(primRestart && indices[i] == primRestart)
@@ -1662,12 +1719,12 @@ static void RT_FetchMeshData(IReplayController *r, ICaptureContext &ctx, Populat
         maxIndex = qMax(maxIndex, indices[i]);
       }
     }
-    else if(draw->indexByteWidth == 2)
+    else if(ib.byteStride == 2)
     {
       uint16_t primRestart = data->vsinConfig.primRestart & 0xffff;
 
       uint16_t *src = (uint16_t *)idata.data();
-      for(size_t i = 0; i < idata.size() / sizeof(uint16_t) && (uint32_t)i < draw->numIndices; i++)
+      for(size_t i = 0; i < idata.size() / sizeof(uint16_t) && (uint32_t)i < numIndices; i++)
       {
         indices[i] = (uint32_t)src[i];
         if(primRestart && indices[i] == primRestart)
@@ -1676,13 +1733,13 @@ static void RT_FetchMeshData(IReplayController *r, ICaptureContext &ctx, Populat
         maxIndex = qMax(maxIndex, indices[i]);
       }
     }
-    else if(draw->indexByteWidth == 4)
+    else if(ib.byteStride == 4)
     {
       uint32_t primRestart = data->vsinConfig.primRestart;
 
-      memcpy(indices, idata.data(), qMin(idata.size(), draw->numIndices * sizeof(uint32_t)));
+      memcpy(indices, idata.data(), qMin(idata.size(), numIndices * sizeof(uint32_t)));
 
-      for(uint32_t i = 0; i < idata.size() / sizeof(uint32_t) && i < draw->numIndices; i++)
+      for(uint32_t i = 0; i < idata.size() / sizeof(uint32_t) && i < numIndices; i++)
       {
         if(primRestart && indices[i] == primRestart)
           continue;
@@ -1777,7 +1834,7 @@ static void RT_FetchMeshData(IReplayController *r, ICaptureContext &ctx, Populat
 
   if(draw && data->postVS.indexResourceId != ResourceId() && (draw->flags & DrawFlags::Indexed))
     idata = r->GetBufferData(data->postVS.indexResourceId, data->postVS.indexByteOffset,
-                             draw->numIndices * data->postVS.indexByteStride);
+                             numIndices * data->postVS.indexByteStride);
 
   indices = NULL;
   if(data->vsoutConfig.indices)
@@ -1791,25 +1848,25 @@ static void RT_FetchMeshData(IReplayController *r, ICaptureContext &ctx, Populat
     data->vsoutConfig.displayIndices->ref();
 
     data->vsoutConfig.indices = new BufferData();
-    if(draw && draw->indexByteWidth != 0 && !idata.isEmpty())
+    if(draw && ib.byteStride != 0 && !idata.isEmpty())
     {
-      data->vsoutConfig.indices->storage.resize(sizeof(uint32_t) * draw->numIndices);
+      data->vsoutConfig.indices->storage.resize(sizeof(uint32_t) * numIndices);
       indices = (uint32_t *)data->vsoutConfig.indices->data();
 
-      if(draw->indexByteWidth == 1)
+      if(ib.byteStride == 1)
       {
-        for(size_t i = 0; i < idata.size() && (uint32_t)i < draw->numIndices; i++)
+        for(size_t i = 0; i < idata.size() && (uint32_t)i < numIndices; i++)
           indices[i] = (uint32_t)idata[i];
       }
-      else if(draw->indexByteWidth == 2)
+      else if(ib.byteStride == 2)
       {
         uint16_t *src = (uint16_t *)idata.data();
-        for(size_t i = 0; i < idata.size() / sizeof(uint16_t) && (uint32_t)i < draw->numIndices; i++)
+        for(size_t i = 0; i < idata.size() / sizeof(uint16_t) && (uint32_t)i < numIndices; i++)
           indices[i] = (uint32_t)src[i];
       }
-      else if(draw->indexByteWidth == 4)
+      else if(ib.byteStride == 4)
       {
-        memcpy(indices, idata.data(), qMin(idata.size(), draw->numIndices * sizeof(uint32_t)));
+        memcpy(indices, idata.data(), qMin(idata.size(), numIndices * sizeof(uint32_t)));
       }
     }
   }
@@ -1902,7 +1959,8 @@ static void UnrollConstant(rdcstr prefix, uint32_t baseOffset, const ShaderConst
     for(const ShaderConstant &child : constant.type.members)
     {
       UnrollConstant(isArray ? QFormatStr("%1[%2]").arg(baseName).arg(a) : QString(baseName),
-                     baseOffset + constant.byteOffset, child, columns, props);
+                     baseOffset + constant.byteOffset + a * constant.type.descriptor.arrayByteStride,
+                     child, columns, props);
     }
   }
 }
@@ -1950,12 +2008,12 @@ BufferViewer::BufferViewer(ICaptureContext &ctx, bool meshview, QWidget *parent)
   ui->outputTabs->setCurrentIndex(0);
   m_CurStage = MeshDataStage::VSIn;
 
-  ui->vsinData->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-  ui->vsoutData->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-  ui->gsoutData->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+  ui->vsinData->setFont(Formatter::FixedFont());
+  ui->vsoutData->setFont(Formatter::FixedFont());
+  ui->gsoutData->setFont(Formatter::FixedFont());
 
-  ui->minBoundsLabel->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-  ui->maxBoundsLabel->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+  ui->minBoundsLabel->setFont(Formatter::FixedFont());
+  ui->maxBoundsLabel->setFont(Formatter::FixedFont());
 
   ui->rowOffset->setFont(Formatter::PreferredFont());
   ui->instance->setFont(Formatter::PreferredFont());
@@ -2474,14 +2532,16 @@ void BufferViewer::OnEventChanged(uint32_t eventId)
 
     ClearModels();
 
-    if(m_Ctx.CurPipelineState().IsStripRestartEnabled() && draw &&
-       (draw->flags & DrawFlags::Indexed) && SupportsRestart(draw->topology))
-    {
-      bufdata->vsinConfig.primRestart = m_Ctx.CurPipelineState().GetStripRestartIndex();
+    const PipeState &pipe = m_Ctx.CurPipelineState();
 
-      if(draw->indexByteWidth == 1)
+    if(pipe.IsStripRestartEnabled() && draw && (draw->flags & DrawFlags::Indexed) &&
+       SupportsRestart(pipe.GetPrimitiveTopology()))
+    {
+      bufdata->vsinConfig.primRestart = pipe.GetStripRestartIndex();
+
+      if(pipe.GetIBuffer().byteStride == 1)
         bufdata->vsinConfig.primRestart &= 0xff;
-      else if(draw->indexByteWidth == 2)
+      else if(pipe.GetIBuffer().byteStride == 2)
         bufdata->vsinConfig.primRestart &= 0xffff;
 
       bufdata->vsoutConfig.primRestart = bufdata->vsinConfig.primRestart;
@@ -2523,7 +2583,7 @@ void BufferViewer::OnEventChanged(uint32_t eventId)
 
   bufdata->vsinConfig.baseVertex = draw ? draw->baseVertex : 0;
 
-  ui->instance->setEnabled(draw && draw->numInstances > 1);
+  ui->instance->setEnabled(draw && (draw->flags & DrawFlags::Instanced));
   if(!ui->instance->isEnabled())
     ui->instance->setValue(0);
 
@@ -2575,27 +2635,38 @@ void BufferViewer::OnEventChanged(uint32_t eventId)
 
       buf->stride = qMax((size_t)1, buf->stride);
 
-      uint64_t unclampedLen = m_ByteSize;
-      if(unclampedLen == UINT64_MAX)
-      {
-        uint64_t bufLen =
-            m_IsBuffer && m_BufferID != ResourceId() ? m_Ctx.GetBuffer(m_BufferID)->length : 0;
-        uint64_t bufOffs = m_ByteOffset;
+      // the "permanent" range starts at ByteOffset and goes for m_ByteSize
+      uint64_t rangeStart = m_ByteOffset;
+      uint64_t rangeEnd = m_ByteOffset + m_ByteSize;
 
-        if(bufOffs >= bufLen)
-          unclampedLen = 0;
-        else
-          unclampedLen = bufLen - bufOffs;
-      }
+      // if the byte size is unbounded, the end is unbounded - fix the potential overflow from
+      // adding the offset
+      if(m_ByteSize == UINT64_MAX)
+        rangeEnd = UINT64_MAX;
 
-      unclampedLen -= m_PagingByteOffset;
+      // get the underlying buffer length
+      uint64_t bufferLength =
+          m_IsBuffer && m_BufferID != ResourceId() ? m_Ctx.GetBuffer(m_BufferID)->length : 0;
 
-      uint64_t clampedLen = qMin(unclampedLen, uint64_t(buf->stride * (MaxVisibleRows + 2)));
+      // clamp the range to the buffer length, which may end up with it being empty
+      rangeEnd = qMin(rangeEnd, bufferLength);
+      rangeStart = qMin(rangeStart, bufferLength);
+
+      // store the number of rows unclamped without the paging window
+      bufdata->vsinConfig.unclampedNumRows =
+          uint32_t((rangeEnd - rangeStart + buf->stride - 1) / buf->stride);
+
+      // advance the range by the paging offset
+      rangeStart = qMin(rangeEnd, rangeStart + m_PagingByteOffset);
+
+      // calculate the length clamped to the MaxVisibleRows
+      uint64_t clampedLength =
+          qMin(rangeEnd - rangeStart, uint64_t(buf->stride * (MaxVisibleRows + 2)));
 
       if(m_IsBuffer)
       {
-        if(clampedLen > 0)
-          buf->storage = r->GetBufferData(m_BufferID, CurrentByteOffset(), clampedLen);
+        if(clampedLength > 0)
+          buf->storage = r->GetBufferData(m_BufferID, CurrentByteOffset(), clampedLength);
       }
       else
       {
@@ -2606,8 +2677,6 @@ void BufferViewer::OnEventChanged(uint32_t eventId)
 
       bufdata->vsinConfig.pagingOffset = uint32_t(m_PagingByteOffset / buf->stride);
       bufdata->vsinConfig.numRows = uint32_t((bufCount + buf->stride - 1) / buf->stride);
-      bufdata->vsinConfig.unclampedNumRows =
-          uint32_t((unclampedLen + m_PagingByteOffset + buf->stride - 1) / buf->stride);
 
       // ownership passes to model
       bufdata->vsinConfig.buffers.push_back(buf);
@@ -2673,11 +2742,11 @@ void BufferViewer::OnEventChanged(uint32_t eventId)
       if(!m_MeshView)
         numRows = qMax(numRows, bufdata->vsinConfig.unclampedNumRows);
 
-      ui->rowOffset->setMaximum((int)qMax(0U, numRows - 1));
+      ui->rowOffset->setMaximum((int)qMax(1U, numRows) - 1);
 
-      ScrollToRow(ui->vsinData, qMin(int(bufdata->vsinConfig.numRows - 1), bufdata->vsinVert));
-      ScrollToRow(ui->vsoutData, qMin(int(bufdata->vsoutConfig.numRows - 1), bufdata->vsoutVert));
-      ScrollToRow(ui->gsoutData, qMin(int(bufdata->gsoutConfig.numRows - 1), bufdata->gsoutVert));
+      ScrollToRow(ui->vsinData, qMin(int(bufdata->vsinConfig.numRows) - 1, bufdata->vsinVert));
+      ScrollToRow(ui->vsoutData, qMin(int(bufdata->vsoutConfig.numRows) - 1, bufdata->vsoutVert));
+      ScrollToRow(ui->gsoutData, qMin(int(bufdata->gsoutConfig.numRows) - 1, bufdata->gsoutVert));
 
       ui->vsinData->horizontalScrollBar()->setValue(bufdata->vsinHoriz);
       ui->vsoutData->horizontalScrollBar()->setValue(bufdata->vsoutHoriz);
@@ -3008,7 +3077,9 @@ void BufferViewer::UI_CalculateMeshFormats()
   if(!m_MeshView)
     return;
 
-  rdcarray<BoundVBuffer> vbs = m_Ctx.CurPipelineState().GetVBuffers();
+  const PipeState &pipe = m_Ctx.CurPipelineState();
+
+  rdcarray<BoundVBuffer> vbs = pipe.GetVBuffers();
   const DrawcallDescription *draw = m_Ctx.CurDrawcall();
 
   if(draw)
@@ -3016,10 +3087,10 @@ void BufferViewer::UI_CalculateMeshFormats()
     m_VSInPosition = MeshFormat();
     m_VSInSecondary = MeshFormat();
 
-    m_VSInPosition.allowRestart = m_Ctx.CurPipelineState().IsStripRestartEnabled() &&
+    m_VSInPosition.allowRestart = pipe.IsStripRestartEnabled() &&
                                   (draw->flags & DrawFlags::Indexed) &&
-                                  SupportsRestart(draw->topology);
-    m_VSInPosition.restartIndex = m_Ctx.CurPipelineState().GetStripRestartIndex();
+                                  SupportsRestart(pipe.GetPrimitiveTopology());
+    m_VSInPosition.restartIndex = pipe.GetStripRestartIndex();
 
     const BufferConfiguration &vsinConfig = m_ModelVSIn->getConfig();
 
@@ -3033,12 +3104,16 @@ void BufferViewer::UI_CalculateMeshFormats()
         m_VSInPosition.numIndices = vsinConfig.numRows;
       else
         m_VSInPosition.numIndices = draw->numIndices;
-      m_VSInPosition.topology = draw->topology;
-      m_VSInPosition.indexByteStride = draw->indexByteWidth;
+
+      if((draw->flags & DrawFlags::Instanced) && draw->numInstances == 0)
+        m_VSInPosition.numIndices = 0;
+
+      BoundVBuffer ib = pipe.GetIBuffer();
+      m_VSInPosition.topology = pipe.GetPrimitiveTopology();
+      m_VSInPosition.indexByteStride = ib.byteStride;
       m_VSInPosition.baseVertex = draw->baseVertex;
-      BoundVBuffer ib = m_Ctx.CurPipelineState().GetIBuffer();
       m_VSInPosition.indexResourceId = ib.resourceId;
-      m_VSInPosition.indexByteOffset = ib.byteOffset + draw->indexOffset * draw->indexByteWidth;
+      m_VSInPosition.indexByteOffset = ib.byteOffset + draw->indexOffset * ib.byteStride;
       m_VSInPosition.indexByteSize = ib.byteSize;
 
       if((draw->flags & DrawFlags::Indexed) && m_VSInPosition.indexByteStride == 0)
@@ -3116,6 +3191,7 @@ void BufferViewer::UI_CalculateMeshFormats()
       m_PostVSPosition = m_PostVS;
       m_PostVSPosition.vertexByteOffset += el.byteOffset;
       m_PostVSPosition.unproject = prop.systemValue == ShaderBuiltin::Position;
+      m_PostVSPosition.format.compCount = el.type.descriptor.columns;
 
       // if geometry/tessellation is enabled, don't unproject VS output data
       if(m_Ctx.CurPipelineState().GetShader(ShaderStage::Tess_Eval) != ResourceId() ||
@@ -3386,16 +3462,29 @@ void BufferViewer::ScrollToColumn(RDTableView *view, int column)
   view->verticalScrollBar()->setValue(vs);
 }
 
-void BufferViewer::SetCurrentInstance(int instance)
+void BufferViewer::SetCurrentInstance(int32_t instance)
 {
   if(ui->instance->isVisible() && ui->instance->isEnabled())
     ui->instance->setValue(instance);
 }
 
-void BufferViewer::SetCurrentView(int view)
+void BufferViewer::SetCurrentView(int32_t view)
 {
   if(ui->viewIndex->isVisible() && ui->viewIndex->isEnabled())
     ui->viewIndex->setValue(view);
+}
+
+void BufferViewer::SetPreviewStage(MeshDataStage stage)
+{
+  if(m_MeshView)
+  {
+    if(stage == MeshDataStage::VSIn)
+      ui->outputTabs->setCurrentIndex(0);
+    else if(stage == MeshDataStage::VSOut)
+      ui->outputTabs->setCurrentIndex(1);
+    else if(stage == MeshDataStage::GSOut)
+      ui->outputTabs->setCurrentIndex(2);
+  }
 }
 
 void BufferViewer::ViewBuffer(uint64_t byteOffset, uint64_t byteSize, ResourceId id,
@@ -3440,7 +3529,7 @@ void BufferViewer::ViewTexture(ResourceId id, const Subresource &sub, const rdcs
   processFormat(format);
 }
 
-void BufferViewer::ScrollToRow(int row, MeshDataStage stage)
+void BufferViewer::ScrollToRow(int32_t row, MeshDataStage stage)
 {
   ScrollToRow(tableForStage(stage), row);
 
@@ -3451,7 +3540,7 @@ void BufferViewer::ScrollToRow(int row, MeshDataStage stage)
     ui->rowOffset->setValue(row);
 }
 
-void BufferViewer::ScrollToColumn(int column, MeshDataStage stage)
+void BufferViewer::ScrollToColumn(int32_t column, MeshDataStage stage)
 {
   ScrollToColumn(tableForStage(stage), column);
 
@@ -3810,7 +3899,11 @@ void BufferViewer::camGuess_changed(double value)
 
   // take a guess for the aspect ratio, for if the user hasn't overridden it
   Viewport vp = m_Ctx.CurPipelineState().GetViewport(0);
-  m_Config.aspect = (vp.width > 0.0f && vp.height > 0.0f) ? (vp.width / vp.height) : 1.0f;
+
+  float vpWidth = qAbs(vp.width);
+  float vpHeight = qAbs(vp.height);
+
+  m_Config.aspect = (vpWidth > 0.0f && vpHeight > 0.0f) ? (vpWidth / vpHeight) : 1.0f;
 
   if(ui->aspectGuess->value() > 0.0)
     m_Config.aspect = ui->aspectGuess->value();

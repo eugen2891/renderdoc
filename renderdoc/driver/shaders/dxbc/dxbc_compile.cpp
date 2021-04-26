@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -35,7 +35,7 @@ static HMODULE GetLocalD3DCompiler()
 
   rdcstr dll = get_dirname(dllFile) + "/d3dcompiler_47.dll";
 
-  return LoadLibraryW(StringFormat::UTF82Wide(dll.c_str()).data());
+  return LoadLibraryW(StringFormat::UTF82Wide(dll).data());
 }
 
 HMODULE GetD3DCompiler()

@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2020 Baldur Karlsson
+ * Copyright (c) 2020-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -35,7 +35,10 @@ public:
   MiniQtHelper(ICaptureContext &ctx);
   virtual ~MiniQtHelper();
 
-  QWidget *CreateToplevelWidget(const rdcstr &windowTitle) override;
+  void InvokeOntoUIThread(std::function<void()> callback) override;
+
+  QWidget *CreateToplevelWidget(const rdcstr &windowTitle, WidgetCallback closed) override;
+  void CloseToplevelWidget(QWidget *widget) override;
 
   // widget hierarchy
 
@@ -44,8 +47,9 @@ public:
   rdcstr GetWidgetType(QWidget *widget) override;
   QWidget *FindChildByName(QWidget *parent, const rdcstr &name) override;
   QWidget *GetParent(QWidget *widget) override;
-  int GetNumChildren(QWidget *widget) override;
-  QWidget *GetChild(QWidget *parent, int index) override;
+  int32_t GetNumChildren(QWidget *widget) override;
+  QWidget *GetChild(QWidget *parent, int32_t index) override;
+  void DestroyWidget(QWidget *widget) override;
 
   // dialogs
 
@@ -57,23 +61,27 @@ public:
   QWidget *CreateHorizontalContainer() override;
   QWidget *CreateVerticalContainer() override;
   QWidget *CreateGridContainer() override;
+  QWidget *CreateSpacer(bool horizontal) override;
 
   void ClearContainedWidgets(QWidget *parent) override;
-  void AddGridWidget(QWidget *parent, int row, int column, QWidget *child, int rowSpan,
-                     int columnSpan) override;
+  void AddGridWidget(QWidget *parent, int32_t row, int32_t column, QWidget *child, int32_t rowSpan,
+                     int32_t columnSpan) override;
   void AddWidget(QWidget *parent, QWidget *child) override;
-  void InsertWidget(QWidget *parent, int index, QWidget *child) override;
+  void InsertWidget(QWidget *parent, int32_t index, QWidget *child) override;
 
   // widget manipulation
 
   void SetWidgetText(QWidget *widget, const rdcstr &text) override;
   rdcstr GetWidgetText(QWidget *widget) override;
 
-  void SetWidgetFont(QWidget *widget, const rdcstr &font, int fontSize, bool bold,
+  void SetWidgetFont(QWidget *widget, const rdcstr &font, int32_t fontSize, bool bold,
                      bool italic) override;
 
   void SetWidgetEnabled(QWidget *widget, bool enabled) override;
   bool IsWidgetEnabled(QWidget *widget) override;
+
+  void SetWidgetVisible(QWidget *widget, bool visible) override;
+  bool IsWidgetVisible(QWidget *widget) override;
 
   // specific widgets
 
@@ -82,6 +90,8 @@ public:
   QWidget *CreateButton(WidgetCallback pressed) override;
 
   QWidget *CreateLabel() override;
+  void SetLabelImage(QWidget *widget, const bytebuf &data, int32_t width, int32_t height,
+                     bool alpha) override;
 
   QWidget *CreateOutputRenderingWidget() override;
 
@@ -95,7 +105,7 @@ public:
   void SetWidgetChecked(QWidget *checkableWidget, bool checked) override;
   bool IsWidgetChecked(QWidget *checkableWidget) override;
 
-  QWidget *CreateSpinbox(int decimalPlaces, double step) override;
+  QWidget *CreateSpinbox(int32_t decimalPlaces, double step) override;
 
   void SetSpinboxBounds(QWidget *spinbox, double minVal, double maxVal) override;
   void SetSpinboxValue(QWidget *spinbox, double value) override;

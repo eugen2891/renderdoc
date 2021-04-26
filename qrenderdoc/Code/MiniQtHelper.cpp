@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2020 Baldur Karlsson
+ * Copyright (c) 2020-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -42,6 +42,7 @@
 #include "Widgets/Extended/RDLineEdit.h"
 #include "Widgets/Extended/RDTextEdit.h"
 #include "Widgets/Extended/RDToolButton.h"
+#include "toolwindowmanager/ToolWindowManager.h"
 
 MiniQtHelper::MiniQtHelper(ICaptureContext &ctx) : m_Ctx(ctx)
 {
@@ -56,6 +57,11 @@ MiniQtHelper::~MiniQtHelper()
         QObject::disconnect(conn.second);
     }
   });
+}
+
+void MiniQtHelper::InvokeOntoUIThread(std::function<void()> callback)
+{
+  GUIInvoke::call(m_Ctx.GetMainWindow()->Widget(), callback);
 }
 
 void MiniQtHelper::AddWidgetCallback(QWidget *widget, QMetaObject::Connection connection)
@@ -81,12 +87,22 @@ void MiniQtHelper::AddWidgetCallback(QWidget *widget, QMetaObject::Connection co
   });
 }
 
-QWidget *MiniQtHelper::CreateToplevelWidget(const rdcstr &windowTitle)
+QWidget *MiniQtHelper::CreateToplevelWidget(const rdcstr &windowTitle, WidgetCallback closed)
 {
   QWidget *ret = new QWidget();
   ret->setWindowTitle(windowTitle);
   ret->setLayout(new QVBoxLayout());
+  if(closed)
+    AddWidgetCallback(ret, QObject::connect(ret, &QWidget::destroyed, [this, ret, closed]() {
+                        closed(&m_Ctx, ret, rdcstr());
+                      }));
   return ret;
+}
+
+void MiniQtHelper::CloseToplevelWidget(QWidget *widget)
+{
+  if(widget)
+    ToolWindowManager::closeToolWindow(widget);
 }
 
 void MiniQtHelper::SetWidgetName(QWidget *widget, const rdcstr &name)
@@ -127,7 +143,7 @@ QWidget *MiniQtHelper::GetParent(QWidget *widget)
   return widget->parentWidget();
 }
 
-int MiniQtHelper::GetNumChildren(QWidget *widget)
+int32_t MiniQtHelper::GetNumChildren(QWidget *widget)
 {
   if(!widget)
     return 0;
@@ -139,7 +155,7 @@ int MiniQtHelper::GetNumChildren(QWidget *widget)
   return layout->count();
 }
 
-QWidget *MiniQtHelper::GetChild(QWidget *parent, int index)
+QWidget *MiniQtHelper::GetChild(QWidget *parent, int32_t index)
 {
   if(!parent)
     return NULL;
@@ -153,6 +169,11 @@ QWidget *MiniQtHelper::GetChild(QWidget *parent, int index)
     return NULL;
 
   return item->widget();
+}
+
+void MiniQtHelper::DestroyWidget(QWidget *widget)
+{
+  widget->deleteLater();
 }
 
 bool MiniQtHelper::ShowWidgetAsDialog(QWidget *widget)
@@ -211,6 +232,15 @@ QWidget *MiniQtHelper::CreateGridContainer()
   return ret;
 }
 
+QWidget *MiniQtHelper::CreateSpacer(bool horizontal)
+{
+  QWidget *ret = new QWidget();
+  ret->setSizePolicy(horizontal ? QSizePolicy::Expanding : QSizePolicy::Preferred,
+                     horizontal ? QSizePolicy::Preferred : QSizePolicy::Expanding);
+  ret->setMinimumSize(1, 1);
+  return ret;
+}
+
 void MiniQtHelper::ClearContainedWidgets(QWidget *parent)
 {
   if(!parent)
@@ -226,8 +256,8 @@ void MiniQtHelper::ClearContainedWidgets(QWidget *parent)
   }
 }
 
-void MiniQtHelper::AddGridWidget(QWidget *parent, int row, int column, QWidget *child, int rowSpan,
-                                 int columnSpan)
+void MiniQtHelper::AddGridWidget(QWidget *parent, int32_t row, int32_t column, QWidget *child,
+                                 int32_t rowSpan, int32_t columnSpan)
 {
   if(!parent || !child)
     return;
@@ -259,7 +289,7 @@ void MiniQtHelper::AddWidget(QWidget *parent, QWidget *child)
   box->addWidget(child);
 }
 
-void MiniQtHelper::InsertWidget(QWidget *parent, int index, QWidget *child)
+void MiniQtHelper::InsertWidget(QWidget *parent, int32_t index, QWidget *child)
 {
   if(!parent)
     return;
@@ -287,6 +317,26 @@ void MiniQtHelper::SetWidgetText(QWidget *widget, const rdcstr &text)
     TextWidget *w = qobject_cast<TextWidget *>(widget); \
     if(w)                                               \
       return w->setText(text);                          \
+  }
+
+  // setting text on a QLabel removes its pixmap
+  {
+    QLabel *label = qobject_cast<QLabel *>(widget);
+    if(label)
+    {
+      label->setMinimumSize(QSize(0, 0));
+      label->setMaximumSize(QSize(10000, 10000));
+      label->setPixmap(QPixmap());
+    }
+  }
+  {
+    RDLabel *label = qobject_cast<RDLabel *>(widget);
+    if(label)
+    {
+      label->setMinimumSize(QSize(0, 0));
+      label->setMaximumSize(QSize(10000, 10000));
+      label->setPixmap(QPixmap());
+    }
   }
 
   SET_TEXT(RDLabel);
@@ -361,7 +411,7 @@ rdcstr MiniQtHelper::GetWidgetText(QWidget *widget)
   return widget->windowTitle();
 }
 
-void MiniQtHelper::SetWidgetFont(QWidget *widget, const rdcstr &font, int fontSize, bool bold,
+void MiniQtHelper::SetWidgetFont(QWidget *widget, const rdcstr &font, int32_t fontSize, bool bold,
                                  bool italic)
 {
   if(!widget)
@@ -395,6 +445,22 @@ bool MiniQtHelper::IsWidgetEnabled(QWidget *widget)
   return widget->isEnabled();
 }
 
+void MiniQtHelper::SetWidgetVisible(QWidget *widget, bool visible)
+{
+  if(!widget)
+    return;
+
+  widget->setVisible(visible);
+}
+
+bool MiniQtHelper::IsWidgetVisible(QWidget *widget)
+{
+  if(!widget)
+    return false;
+
+  return widget->isVisible();
+}
+
 QWidget *MiniQtHelper::CreateGroupBox(bool collapsible)
 {
   QWidget *ret;
@@ -402,6 +468,7 @@ QWidget *MiniQtHelper::CreateGroupBox(bool collapsible)
     ret = new CollapseGroupBox();
   else
     ret = new QGroupBox();
+  ret->setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::MinimumExpanding);
   ret->setLayout(new QVBoxLayout());
   return ret;
 }
@@ -420,10 +487,41 @@ QWidget *MiniQtHelper::CreateLabel()
   return new RDLabel();
 }
 
+void MiniQtHelper::SetLabelImage(QWidget *widget, const bytebuf &data, int32_t width,
+                                 int32_t height, bool alpha)
+{
+  if(!widget)
+    return;
+
+  RDLabel *label = qobject_cast<RDLabel *>(widget);
+
+  if(label)
+  {
+    QPixmap pixmap;
+
+    int32_t bpp = alpha ? 4 : 3;
+    if(width > 0 && height > 0 && size_t(width * height * bpp) == data.size())
+    {
+      label->setFixedSize(width, height);
+      label->setPixmap(
+          QPixmap::fromImage(QImage(data.data(), width, height, width * bpp,
+                                    alpha ? QImage::Format_RGBA8888 : QImage::Format_RGB888)
+                                 .copy(0, 0, width, height)));
+    }
+    else
+    {
+      label->setMinimumSize(QSize());
+      label->setMaximumSize(QSize(10000, 10000));
+      label->setPixmap(QPixmap());
+    }
+  }
+}
+
 QWidget *MiniQtHelper::CreateOutputRenderingWidget()
 {
   CustomPaintWidget *widget = new CustomPaintWidget(NULL);
   widget->SetContext(m_Ctx);
+  widget->setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::MinimumExpanding);
   return widget;
 }
 
@@ -514,7 +612,7 @@ bool MiniQtHelper::IsWidgetChecked(QWidget *checkableWidget)
   return false;
 }
 
-QWidget *MiniQtHelper::CreateSpinbox(int decimalPlaces, double step)
+QWidget *MiniQtHelper::CreateSpinbox(int32_t decimalPlaces, double step)
 {
   RDDoubleSpinBox *ret = new RDDoubleSpinBox();
   ret->setSingleStep(step);
@@ -572,6 +670,7 @@ QWidget *MiniQtHelper::CreateTextBox(bool singleLine, WidgetCallback changed)
       AddWidgetCallback(w, QObject::connect(w, &RDTextEdit::textChanged, [this, w, changed]() {
                           changed(&m_Ctx, w, w->toPlainText());
                         }));
+    w->setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::MinimumExpanding);
     return w;
   }
 }

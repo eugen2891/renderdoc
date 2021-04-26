@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -668,7 +668,7 @@ ResourceId D3D12Replay::RenderOverlay(ResourceId texid, FloatVector clearCol, De
       psoDesc.RasterizerState.MultisampleEnable = FALSE;
       psoDesc.RasterizerState.AntialiasedLineEnable = FALSE;
 
-      float clearColour[] = {0.0f, 1.0f, 0.0f, 0.0f};
+      float clearColour[] = {0.0f, 0.0f, 0.0f, 0.0f};
       list->ClearRenderTargetView(rtv, clearColour, 0, NULL);
 
       list->Close();
@@ -1385,7 +1385,14 @@ ResourceId D3D12Replay::RenderOverlay(ResourceId texid, FloatVector clearCol, De
         }
 
         dsv = GetDebugManager()->GetCPUHandle(OVERLAY_DSV);
-        m_pDevice->CreateDepthStencilView(overrideDepth, NULL, dsv);
+
+        D3D12_DEPTH_STENCIL_VIEW_DESC viewDesc = rs.dsv.GetDSV();
+        viewDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
+        viewDesc.Texture2DArray.ArraySize = 1;
+        viewDesc.Texture2DArray.FirstArraySlice = 0;
+        viewDesc.Texture2DArray.MipSlice = 0;
+
+        m_pDevice->CreateDepthStencilView(overrideDepth, &viewDesc, dsv);
       }
 
       // declare callback struct here
@@ -1506,7 +1513,7 @@ ResourceId D3D12Replay::RenderOverlay(ResourceId texid, FloatVector clearCol, De
       psoDesc.RasterizerState.MultisampleEnable = FALSE;
       psoDesc.RasterizerState.AntialiasedLineEnable = FALSE;
 
-      float clearColour[] = {0.0f, 1.0f, 0.0f, 0.0f};
+      float clearColour[] = {0.0f, 0.0f, 0.0f, 0.0f};
       list->ClearRenderTargetView(rtv, clearColour, 0, NULL);
 
       list->Close();

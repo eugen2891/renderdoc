@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -26,14 +26,18 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QContextMenuEvent>
+#include <QDesktopWidget>
+#include <QHeaderView>
 #include <QLabel>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QProxyStyle>
+#include <QScrollBar>
+#include <QStack>
 #include <QStylePainter>
-#include <QToolTip>
 #include <QWheelEvent>
+#include "Code/QRDUtils.h"
 #include "Code/Resources.h"
 
 static int GetDepth(const QAbstractItemModel *model, const QModelIndex &idx)
@@ -85,6 +89,12 @@ RDTreeViewDelegate::RDTreeViewDelegate(RDTreeView *view) : ForwardingDelegate(vi
 {
 }
 
+void RDTreeViewDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option,
+                               const QModelIndex &index) const
+{
+  return ForwardingDelegate::paint(painter, option, index);
+}
+
 QSize RDTreeViewDelegate::sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const
 {
   QSize ret = ForwardingDelegate::sizeHint(option, index);
@@ -120,6 +130,23 @@ RDTipLabel::RDTipLabel(QWidget *listener) : QLabel(NULL), mouseListener(listener
   setAlignment(Qt::AlignLeft);
   setIndent(1);
   setWindowOpacity(opacity / 255.0);
+}
+
+QSize RDTipLabel::configureTip(QWidget *, QModelIndex, QString text)
+{
+  setText(text);
+  return minimumSizeHint();
+}
+
+void RDTipLabel::showTip(QPoint pos)
+{
+  move(pos);
+  show();
+}
+
+bool RDTipLabel::forceTip(QWidget *widget, QModelIndex idx)
+{
+  return false;
 }
 
 void RDTipLabel::paintEvent(QPaintEvent *ev)
@@ -177,23 +204,72 @@ RDTreeView::RDTreeView(QWidget *parent) : QTreeView(parent)
   m_delegate = new RDTreeViewDelegate(this);
   QTreeView::setItemDelegate(m_delegate);
 
-  m_ElidedTooltip = new RDTipLabel(viewport());
-  m_ElidedTooltip->hide();
+  m_TooltipLabel = new RDTipLabel(viewport());
+  m_TooltipLabel->hide();
+  m_CurrentTooltipElided = false;
+
+  m_Tooltip = m_TooltipLabel;
 }
 
 RDTreeView::~RDTreeView()
 {
   setModel(NULL);
 
-  delete m_ElidedTooltip;
+  delete m_TooltipLabel;
 }
 
 void RDTreeView::mouseMoveEvent(QMouseEvent *e)
 {
-  if(m_ElidedTooltip->isVisible() && !m_ElidedTooltip->geometry().contains(QCursor::pos()))
-    m_ElidedTooltip->hide();
+  QModelIndex oldHoverIndex = m_currentHoverIndex;
+
+  if(m_CurrentTooltipElided && m_TooltipLabel->isVisible() &&
+     !m_TooltipLabel->geometry().contains(QCursor::pos()))
+    m_Tooltip->hideTip();
 
   m_currentHoverIndex = indexAt(e->pos());
+
+  if(oldHoverIndex != m_currentHoverIndex)
+  {
+    if(m_instantTooltips)
+    {
+      m_Tooltip->hideTip();
+
+      if(m_currentHoverIndex.isValid())
+      {
+        QString tooltip = m_currentHoverIndex.data(Qt::ToolTipRole).toString();
+
+        if(!tooltip.isEmpty() || m_Tooltip->forceTip(this, m_currentHoverIndex))
+        {
+          // We don't use QToolTip since we have a custom tooltip for showing elided results, and we
+          // use that for consistency. This also makes it easier to slot in a custom tooltip widget
+          // externally.
+          QPoint p = QCursor::pos();
+
+          // estimate, as this is not easily queryable
+          const QPoint cursorSize(16, 16);
+          const QRect screenAvailGeom = QApplication::desktop()->availableGeometry(p);
+
+          // start with the tooltip placed bottom-right of the cursor, as the default
+          QRect tooltipRect;
+          tooltipRect.setTopLeft(p + cursorSize);
+          tooltipRect.setSize(m_Tooltip->configureTip(this, m_currentHoverIndex, tooltip));
+
+          // clip by the available geometry in x
+          if(tooltipRect.right() > screenAvailGeom.right())
+            tooltipRect.moveRight(screenAvailGeom.right());
+
+          // if we'd go out of bounds in y, place the tooltip above the cursor. Don't just clip like
+          // in x, because that could place the tooltip over the cursor.
+          if(tooltipRect.bottom() > screenAvailGeom.bottom())
+            tooltipRect.moveBottom(p.y() - cursorSize.y());
+
+          m_Tooltip->showTip(tooltipRect.topLeft());
+          m_CurrentTooltipElided = false;
+        }
+      }
+    }
+  }
+
   QTreeView::mouseMoveEvent(e);
 }
 
@@ -205,8 +281,15 @@ void RDTreeView::wheelEvent(QWheelEvent *e)
 
 void RDTreeView::leaveEvent(QEvent *e)
 {
-  if(m_ElidedTooltip->isVisible() && !m_ElidedTooltip->geometry().contains(QCursor::pos()))
-    m_ElidedTooltip->hide();
+  if(m_CurrentTooltipElided)
+  {
+    if(m_TooltipLabel->isVisible() && !m_TooltipLabel->geometry().contains(QCursor::pos()))
+      m_Tooltip->hideTip();
+  }
+  else
+  {
+    m_Tooltip->hideTip();
+  }
 
   m_currentHoverIndex = QModelIndex();
 
@@ -251,6 +334,8 @@ void RDTreeView::contextMenuEvent(QContextMenuEvent *event)
   expandAllAction.setIcon(Icons::arrow_out());
   collapseAllAction.setIcon(Icons::arrow_in());
 
+  copy.setIcon(Icons::copy());
+
   expandAllAction.setEnabled(index.isValid() && model()->rowCount(index) > 0);
   collapseAllAction.setEnabled(index.isValid() && model()->rowCount(index) > 0);
 
@@ -258,19 +343,22 @@ void RDTreeView::contextMenuEvent(QContextMenuEvent *event)
 
   QObject::connect(&collapseAllAction, &QAction::triggered, [this, index]() { collapseAll(index); });
 
-  QObject::connect(&copy, &QAction::triggered, [this, index, pos]() {
-    bool clearsel = false;
-    if(selectionModel()->selectedRows().empty())
-    {
-      setSelection(QRect(pos, QSize(1, 1)), selectionCommand(index));
-      clearsel = true;
-    }
-    copySelection();
-    if(clearsel)
-      selectionModel()->clear();
-  });
+  QObject::connect(&copy, &QAction::triggered, [this, index, pos]() { copyIndex(pos, index); });
 
   RDDialog::show(&contextMenu, viewport()->mapToGlobal(pos));
+}
+
+void RDTreeView::copyIndex(QPoint pos, QModelIndex index)
+{
+  bool clearsel = false;
+  if(selectionModel()->selectedRows().empty())
+  {
+    setSelection(QRect(pos, QSize(1, 1)), selectionCommand(index));
+    clearsel = true;
+  }
+  copySelection();
+  if(clearsel)
+    selectionModel()->clear();
 }
 
 void RDTreeView::expandAll(QModelIndex index)
@@ -291,40 +379,49 @@ void RDTreeView::collapseAll(QModelIndex index)
 
 bool RDTreeView::viewportEvent(QEvent *event)
 {
-  if(m_TooltipElidedItems && event->type() == QEvent::ToolTip)
+  if(event->type() == QEvent::ToolTip)
   {
-    QHelpEvent *he = (QHelpEvent *)event;
-    QModelIndex index = indexAt(he->pos());
+    // if we're doing instant tooltips this is all handled in the mousemove handler, don't do
+    // anything here
+    if(m_instantTooltips)
+      return true;
 
-    QAbstractItemDelegate *delegate = m_userDelegate;
-
-    if(!delegate)
-      delegate = QTreeView::itemDelegate(index);
-
-    if(delegate)
+    if(m_TooltipElidedItems)
     {
-      QStyleOptionViewItem option;
-      option.initFrom(this);
-      option.rect = visualRect(index);
+      QHelpEvent *he = (QHelpEvent *)event;
+      QModelIndex index = indexAt(he->pos());
 
-      // delegates get first dibs at processing the event
-      bool ret = delegate->helpEvent(he, this, option, index);
+      QAbstractItemDelegate *delegate = m_userDelegate;
 
-      if(ret)
-        return true;
+      if(!delegate)
+        delegate = QTreeView::itemDelegate(index);
 
-      QSize desiredSize = delegate->sizeHint(option, index);
-
-      if(desiredSize.width() > option.rect.width())
+      if(delegate)
       {
-        const QString fullText = index.data(Qt::DisplayRole).toString();
-        if(!fullText.isEmpty())
+        QStyleOptionViewItem option;
+        option.initFrom(this);
+        option.rect = visualRect(index);
+
+        // delegates get first dibs at processing the event
+        bool ret = delegate->helpEvent(he, this, option, index);
+
+        if(ret)
+          return true;
+
+        QSize desiredSize = delegate->sizeHint(option, index);
+
+        if(desiredSize.width() > option.rect.width())
         {
-          // need to use a custom label tooltip since the QToolTip freaks out as we're placing it
-          // underneath the cursor instead of next to it (so that the tooltip lines up over the row)
-          m_ElidedTooltip->move(viewport()->mapToGlobal(option.rect.topLeft()));
-          m_ElidedTooltip->setText(fullText);
-          m_ElidedTooltip->show();
+          const QString fullText = index.data(Qt::DisplayRole).toString();
+          if(!fullText.isEmpty())
+          {
+            // need to use a custom label tooltip since the QToolTip freaks out as we're placing it
+            // underneath the cursor instead of next to it (so that the tooltip lines up over the
+            // row)
+            m_Tooltip->configureTip(this, index, fullText);
+            m_Tooltip->showTip(viewport()->mapToGlobal(option.rect.topLeft()));
+            m_CurrentTooltipElided = true;
+          }
         }
       }
     }
@@ -535,8 +632,33 @@ void RDTreeView::drawRow(QPainter *painter, const QStyleOptionViewItem &options,
   }
 }
 
-void RDTreeView::fillBranchesRect(QPainter *painter, const QRect &rect, const QModelIndex &index) const
+void RDTreeView::drawBranches(QPainter *painter, const QRect &rect, const QModelIndex &index) const
 {
+  // we do our own custom branch rendering to ensure the backgrounds for the +/- markers are filled
+  // (as otherwise they don't show up well over selection or background fills) as well as to draw
+  // any vertical branch colors.
+
+  // start at the left-most side of the rect
+  QRect branchRect(rect.left(), rect.top(), indentation(), rect.height());
+
+  // first draw the coloured lines - we're only interested in parents for this, so push all the
+  // parents onto a stack
+  QStack<QModelIndex> parents;
+
+  QModelIndex parent = index.parent();
+
+  while(parent.isValid())
+  {
+    parents.push(parent);
+    parent = parent.parent();
+  }
+
+  // fill in the background behind the lines for the whole row, since by default it doesn't show up
+  // behind the tree lines.
+
+  QRect allLinesRect(rect.left(), rect.top(),
+                     (parents.count() + (rootIsDecorated() ? 1 : 0)) * indentation(), rect.height());
+
   QStyleOptionViewItem opt;
   opt.initFrom(this);
   if(selectionModel()->isSelected(index))
@@ -563,12 +685,13 @@ void RDTreeView::fillBranchesRect(QPainter *painter, const QRect &rect, const QM
   opt.rect.setWidth(depth * indentation());
   opt.showDecorationSelected = true;
   style()->drawPrimitive(QStyle::PE_PanelItemViewItem, &opt, painter, this);
-}
 
-void RDTreeView::drawBranches(QPainter *painter, const QRect &rect, const QModelIndex &index) const
-{
-  if(m_fillBranchRect)
-    fillBranchesRect(painter, rect, index);
+  QBrush back = index.data(Qt::BackgroundRole).value<QBrush>();
+
+  if(!selectionModel()->isSelected(index) && back.style() != Qt::NoBrush)
+  {
+    painter->fillRect(allLinesRect, back);
+  }
 
   if(m_VisibleBranches)
   {
@@ -587,17 +710,108 @@ void RDTreeView::drawBranches(QPainter *painter, const QRect &rect, const QModel
     if(model()->rowCount(index) == 0)
       return;
 
-    QStyleOptionViewItem opt = viewOptions();
+    QStyleOptionViewItem branchopt = viewOptions();
 
-    opt.rect = primitive;
+    branchopt.rect = primitive;
 
     // unfortunately QStyle::State_Children doesn't render ONLY the
     // open-toggle-button, but the vertical line upwards to a previous sibling.
     // For consistency, draw one downwards too.
-    opt.state = QStyle::State_Children | QStyle::State_Sibling;
+    branchopt.state = QStyle::State_Children | QStyle::State_Sibling;
     if(isExpanded(index))
-      opt.state |= QStyle::State_Open;
+      branchopt.state |= QStyle::State_Open;
 
-    style()->drawPrimitive(QStyle::PE_IndicatorBranch, &opt, painter, this);
+    style()->drawPrimitive(QStyle::PE_IndicatorBranch, &branchopt, painter, this);
   }
+
+  // we now iterate from the top-most parent down, moving in from the left
+  // we draw this after calling into drawBranches() so we paint on top of the built-in lines
+  QPen oldPen = painter->pen();
+  while(!parents.isEmpty())
+  {
+    parent = parents.pop();
+
+    back = parent.data(RDTreeView::TreeLineColorRole).value<QBrush>();
+
+    if(back.style() != Qt::NoBrush)
+    {
+      // draw a centred pen vertically down the middle of branchRect
+      painter->setPen(QPen(QBrush(back), m_treeColorLineWidth));
+
+      QPoint topCentre = QRect(branchRect).center();
+      QPoint bottomCentre = topCentre;
+
+      topCentre.setY(branchRect.top());
+      bottomCentre.setY(branchRect.bottom());
+
+      painter->drawLine(topCentre, bottomCentre);
+    }
+
+    branchRect.moveLeft(branchRect.left() + indentation());
+  }
+  painter->setPen(oldPen);
+}
+
+QModelIndex RDTreeView::moveCursor(CursorAction cursorAction, Qt::KeyboardModifiers modifiers)
+{
+  // Qt's handling for MoveLeft is a little broken when scrollbars are in use, so we customise it
+  // do almost the same thing but with a fix
+  if(cursorAction == QAbstractItemView::MoveLeft)
+  {
+    // The default MoveRight is fine. It does in order:
+    // 1. if the current item is expandable but not expanded, it expands it.
+    // 2. if SH_ItemView_ArrowKeysNavigateIntoChildren is enabled it moves to the first child of the
+    //    current item if there is one.
+    // 3. finally it tries to scroll right, either by selecting the next column or just moving the
+    //    scrollbar.
+    //
+    // That's all good, but MoveLeft is not symmetric. Meaning it will do this:
+    // 1. if the current item is expandable and expanded, collapse it, *but only if the scrollbar is
+    //    all the way to the left*.
+    // 2. if SH_ItemView_ArrowKeysNavigateIntoChildren is enabled it moves to the current item's
+    //    parent.
+    // 3. finally it tries to scroll left if it can't do that.
+    //
+    // The problem here is that because scrolling left is still the last-resort icon, pressing right
+    // to expand an item and then perhaps scrolling right is not "undone" by pressing left, since
+    // we've now scrolled so the collapse doesn't happen and instead we jump to the parent node.
+    //
+    // To fix this, we scroll first, then handle the other two cases
+
+    QModelIndex current = currentIndex();
+
+    if(selectionBehavior() == QAbstractItemView::SelectItems ||
+       selectionBehavior() == QAbstractItemView::SelectColumns)
+    {
+      int col = header()->visualIndex(current.column());
+      // move left one
+      col--;
+
+      // keep moving if the column is hiden
+      while(col >= 0 && isColumnHidden(header()->logicalIndex(col)))
+        col--;
+
+      // if we landed on a valid column (we may have gone negative if we were already on the first
+      // column) return it
+      if(col >= 0)
+      {
+        QModelIndex sel = current.sibling(current.row(), header()->logicalIndex(col));
+        if(sel.isValid())
+          return sel;
+      }
+    }
+
+    // if we didn't scroll left above by selecting an index, and the scrollbar is still not
+    // minimised, scroll it left now.
+    QScrollBar *scroll = horizontalScrollBar();
+    if(scroll->value() > scroll->minimum())
+    {
+      scroll->setValue(scroll->value() - scroll->singleStep());
+      return current;
+    }
+
+    // otherwise we can use the default behaviour
+  }
+
+  return QTreeView::moveCursor(cursorAction, modifiers);
 }

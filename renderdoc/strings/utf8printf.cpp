@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -1840,6 +1840,10 @@ TEST_CASE("utf8printf printing floats", "[utf8printf]")
     CHECK(StringFormat::Fmt("%F", negone / zero) == "-INF");
     CHECK(StringFormat::Fmt("%F", sqrt(negone)) == "NAN");
     CHECK(StringFormat::Fmt("%F", -sqrt(negone)) == "NAN");
+
+    // subnormal value
+    CHECK(StringFormat::Fmt("%.8e", 1.23456789e-310) == "1.23456789e-310");
+    CHECK(StringFormat::Fmt("%.8e", -1.23456789e-310) == "-1.23456789e-310");
   }
 
   SECTION("Basic numbers as %f")

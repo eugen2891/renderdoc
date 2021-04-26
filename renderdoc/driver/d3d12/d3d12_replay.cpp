@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -46,6 +46,9 @@
 RDOC_CONFIG(bool, D3D12_HardwareCounters, true,
             "Enable support for IHV-specific hardware counters on D3D12.");
 
+// this is global so we can free it even after D3D12Replay is destroyed
+static HMODULE D3D12Lib = NULL;
+
 static const char *LiveDriverDisassemblyTarget = "Live driver disassembly";
 
 ID3DDevice *GetD3D12DeviceIfAlloc(IUnknown *dev);
@@ -67,6 +70,11 @@ void D3D12Replay::Shutdown()
   SAFE_DELETE(m_RGP);
 
   m_pDevice->Release();
+
+  // the this pointer is free'd after this point
+
+  FreeLibrary(D3D12Lib);
+  D3D12_CleanupReplaySDK();
 }
 
 void D3D12Replay::Initialise(IDXGIFactory1 *factory)
@@ -712,8 +720,7 @@ void D3D12Replay::FillResourceView(D3D12Pipe::View &view, const D3D12Descriptor 
     {
       const D3D12_DEPTH_STENCIL_VIEW_DESC &dsv = desc->GetDSV();
 
-      // we deliberately don't apply the DSV format
-      // fmt = dsv.Format;
+      fmt = dsv.Format;
 
       view.type = MakeTextureDim(dsv.ViewDimension);
 
@@ -931,8 +938,9 @@ void D3D12Replay::FillRootElements(const D3D12RenderState::RootSignature &rootSi
   WrappedID3D12RootSignature *sig =
       m_pDevice->GetResourceManager()->GetCurrentAs<WrappedID3D12RootSignature>(rootSig.rootsig);
 
-  rootElements.clear();
   rootElements.reserve(sig->sig.Parameters.size() + sig->sig.StaticSamplers.size());
+
+  size_t ridx = 0;
 
   for(size_t rootEl = 0; rootEl < sig->sig.Parameters.size(); rootEl++)
   {
@@ -940,16 +948,22 @@ void D3D12Replay::FillRootElements(const D3D12RenderState::RootSignature &rootSi
 
     if(p.ParameterType == D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS)
     {
-      rootElements.push_back(D3D12Pipe::RootSignatureRange());
-      D3D12Pipe::RootSignatureRange &element = rootElements.back();
+      rootElements.resize_for_index(ridx);
+      D3D12Pipe::RootSignatureRange &element = rootElements[ridx++];
       element.immediate = true;
       element.rootElement = (uint32_t)rootEl;
       element.type = BindType::ConstantBuffer;
       element.registerSpace = p.Constants.RegisterSpace;
       element.visibility = ToShaderStageMask(p.ShaderVisibility);
 
+      element.samplers.clear();
+      element.constantBuffers.clear();
+      element.views.clear();
+
       element.constantBuffers.push_back(D3D12Pipe::ConstantBuffer(p.Constants.ShaderRegister));
       D3D12Pipe::ConstantBuffer &cb = element.constantBuffers.back();
+      cb.resourceId = ResourceId();
+      cb.byteOffset = 0;
       cb.byteSize = uint32_t(sizeof(uint32_t) * p.Constants.Num32BitValues);
 
       if(rootEl < rootSig.sigelems.size())
@@ -965,13 +979,17 @@ void D3D12Replay::FillRootElements(const D3D12RenderState::RootSignature &rootSi
     }
     else if(p.ParameterType == D3D12_ROOT_PARAMETER_TYPE_CBV)
     {
-      rootElements.push_back(D3D12Pipe::RootSignatureRange());
-      D3D12Pipe::RootSignatureRange &element = rootElements.back();
+      rootElements.resize_for_index(ridx);
+      D3D12Pipe::RootSignatureRange &element = rootElements[ridx++];
       element.immediate = true;
       element.rootElement = (uint32_t)rootEl;
       element.type = BindType::ConstantBuffer;
       element.registerSpace = p.Descriptor.RegisterSpace;
       element.visibility = ToShaderStageMask(p.ShaderVisibility);
+
+      element.samplers.clear();
+      element.constantBuffers.clear();
+      element.views.clear();
 
       element.constantBuffers.push_back(D3D12Pipe::ConstantBuffer(p.Descriptor.ShaderRegister));
       D3D12Pipe::ConstantBuffer &cb = element.constantBuffers.back();
@@ -994,13 +1012,17 @@ void D3D12Replay::FillRootElements(const D3D12RenderState::RootSignature &rootSi
     }
     else if(p.ParameterType == D3D12_ROOT_PARAMETER_TYPE_SRV)
     {
-      rootElements.push_back(D3D12Pipe::RootSignatureRange());
-      D3D12Pipe::RootSignatureRange &element = rootElements.back();
+      rootElements.resize_for_index(ridx);
+      D3D12Pipe::RootSignatureRange &element = rootElements[ridx++];
       element.immediate = true;
       element.rootElement = (uint32_t)rootEl;
       element.type = BindType::ReadOnlyResource;
       element.registerSpace = p.Descriptor.RegisterSpace;
       element.visibility = ToShaderStageMask(p.ShaderVisibility);
+
+      element.samplers.clear();
+      element.constantBuffers.clear();
+      element.views.clear();
 
       element.views.push_back(D3D12Pipe::View(p.Descriptor.ShaderRegister));
       D3D12Pipe::View &view = element.views.back();
@@ -1028,13 +1050,17 @@ void D3D12Replay::FillRootElements(const D3D12RenderState::RootSignature &rootSi
     }
     else if(p.ParameterType == D3D12_ROOT_PARAMETER_TYPE_UAV)
     {
-      rootElements.push_back(D3D12Pipe::RootSignatureRange());
-      D3D12Pipe::RootSignatureRange &element = rootElements.back();
+      rootElements.resize_for_index(ridx);
+      D3D12Pipe::RootSignatureRange &element = rootElements[ridx++];
       element.immediate = true;
       element.rootElement = (uint32_t)rootEl;
       element.type = BindType::ReadWriteResource;
       element.registerSpace = p.Descriptor.RegisterSpace;
       element.visibility = ToShaderStageMask(p.ShaderVisibility);
+
+      element.samplers.clear();
+      element.constantBuffers.clear();
+      element.views.clear();
 
       element.views.push_back(D3D12Pipe::View(p.Descriptor.ShaderRegister));
       D3D12Pipe::View &view = element.views.back();
@@ -1081,12 +1107,17 @@ void D3D12Replay::FillRootElements(const D3D12RenderState::RootSignature &rootSi
         // Here we diverge slightly from how root signatures store data. A descriptor table can
         // contain multiple ranges which can each contain different types. D3D12Pipe treats
         // each range as a separate RootElement
-        rootElements.push_back(D3D12Pipe::RootSignatureRange());
-        D3D12Pipe::RootSignatureRange &element = rootElements.back();
+        rootElements.resize_for_index(ridx);
+        D3D12Pipe::RootSignatureRange &element = rootElements[ridx++];
 
+        element.immediate = false;
         element.rootElement = (uint32_t)rootEl;
         element.registerSpace = range.RegisterSpace;
         element.visibility = ToShaderStageMask(p.ShaderVisibility);
+
+        element.samplers.clear();
+        element.constantBuffers.clear();
+        element.views.clear();
 
         UINT shaderReg = range.BaseShaderRegister;
 
@@ -1169,7 +1200,7 @@ void D3D12Replay::FillRootElements(const D3D12RenderState::RootSignature &rootSi
               samp.addressV = MakeAddressMode(sampDesc.AddressV);
               samp.addressW = MakeAddressMode(sampDesc.AddressW);
 
-              memcpy(samp.borderColor, sampDesc.BorderColor, sizeof(FLOAT) * 4);
+              samp.borderColor = sampDesc.BorderColor;
 
               samp.compareFunction = MakeCompareFunc(sampDesc.ComparisonFunc);
               samp.filter = MakeFilter(sampDesc.Filter);
@@ -1249,16 +1280,20 @@ void D3D12Replay::FillRootElements(const D3D12RenderState::RootSignature &rootSi
   {
     D3D12_STATIC_SAMPLER_DESC &sampDesc = sig->sig.StaticSamplers[i];
 
-    rootElements.push_back(D3D12Pipe::RootSignatureRange());
-    D3D12Pipe::RootSignatureRange &element = rootElements.back();
+    rootElements.resize_for_index(ridx);
+    D3D12Pipe::RootSignatureRange &element = rootElements[ridx++];
     element.immediate = true;
     element.rootElement = (uint32_t)i;
     element.type = BindType::Sampler;
     element.registerSpace = sampDesc.RegisterSpace;
     element.visibility = ToShaderStageMask(sampDesc.ShaderVisibility);
 
+    element.samplers.clear();
+    element.constantBuffers.clear();
+    element.views.clear();
+
     element.samplers.push_back(D3D12Pipe::Sampler(sampDesc.ShaderRegister));
-    D3D12Pipe::Sampler &samp = element.samplers.back();
+    D3D12Pipe::Sampler &samp = element.samplers[0];
 
     samp.addressU = MakeAddressMode(sampDesc.AddressU);
     samp.addressV = MakeAddressMode(sampDesc.AddressV);
@@ -1365,6 +1400,9 @@ void D3D12Replay::SavePipelineState(uint32_t eventId)
     state.inputAssembly.indexBuffer.resourceId = rm->GetOriginalID(rs.ibuffer.buf);
     state.inputAssembly.indexBuffer.byteOffset = rs.ibuffer.offs;
     state.inputAssembly.indexBuffer.byteSize = rs.ibuffer.size;
+    state.inputAssembly.indexBuffer.byteStride = rs.ibuffer.bytewidth;
+
+    state.inputAssembly.topology = MakePrimitiveTopology(rs.topo);
   }
 
   /////////////////////////////////////////////////
@@ -1490,6 +1528,41 @@ void D3D12Replay::SavePipelineState(uint32_t eventId)
           src.ConservativeRaster == D3D12_CONSERVATIVE_RASTERIZATION_MODE_ON
               ? ConservativeRaster::Overestimate
               : ConservativeRaster::Disabled;
+
+      switch(rs.shadingRate)
+      {
+        default:
+        case D3D12_SHADING_RATE_1X1: dst.baseShadingRate = {1, 1}; break;
+        case D3D12_SHADING_RATE_1X2: dst.baseShadingRate = {1, 2}; break;
+        case D3D12_SHADING_RATE_2X1: dst.baseShadingRate = {2, 1}; break;
+        case D3D12_SHADING_RATE_2X2: dst.baseShadingRate = {2, 2}; break;
+        case D3D12_SHADING_RATE_2X4: dst.baseShadingRate = {2, 4}; break;
+        case D3D12_SHADING_RATE_4X2: dst.baseShadingRate = {4, 2}; break;
+        case D3D12_SHADING_RATE_4X4: dst.baseShadingRate = {4, 4}; break;
+      }
+
+      ShadingRateCombiner combiners[2];
+
+      for(int i = 0; i < 2; i++)
+      {
+        switch(rs.shadingRateCombiners[i])
+        {
+          default:
+          case D3D12_SHADING_RATE_COMBINER_PASSTHROUGH:
+            combiners[i] = ShadingRateCombiner::Passthrough;
+            break;
+          case D3D12_SHADING_RATE_COMBINER_OVERRIDE:
+            combiners[i] = ShadingRateCombiner::Override;
+            break;
+          case D3D12_SHADING_RATE_COMBINER_MIN: combiners[i] = ShadingRateCombiner::Min; break;
+          case D3D12_SHADING_RATE_COMBINER_MAX: combiners[i] = ShadingRateCombiner::Max; break;
+          case D3D12_SHADING_RATE_COMBINER_SUM: combiners[i] = ShadingRateCombiner::Multiply; break;
+        }
+      }
+
+      dst.shadingRateCombiners = {combiners[0], combiners[1]};
+
+      dst.shadingRateImage = rm->GetOriginalID(rs.shadingRateImage);
     }
 
     state.rasterizer.scissors.resize(rs.scissors.size());
@@ -1526,7 +1599,7 @@ void D3D12Replay::SavePipelineState(uint32_t eventId)
     if(rs.dsv.GetResResourceId() != ResourceId())
       FillResourceView(state.outputMerger.depthTarget, &rs.dsv);
 
-    memcpy(state.outputMerger.blendState.blendFactor, rs.blendFactor, sizeof(FLOAT) * 4);
+    state.outputMerger.blendState.blendFactor = rs.blendFactor;
 
     {
       D3D12_BLEND_DESC &src = pipe->graphics->BlendState;
@@ -2461,7 +2534,7 @@ bool D3D12Replay::GetMinMax(ResourceId texid, const Subresource &sub, CompType t
 }
 
 bool D3D12Replay::GetHistogram(ResourceId texid, const Subresource &sub, CompType typeCast,
-                               float minval, float maxval, bool channels[4],
+                               float minval, float maxval, const rdcfixedarray<bool, 4> &channels,
                                rdcarray<uint32_t> &histogram)
 {
   if(minval >= maxval)
@@ -2660,8 +2733,7 @@ rdcarray<uint32_t> D3D12Replay::GetPassEvents(uint32_t eventId)
       break;
 
     // if the outputs changed, we're done
-    if(memcmp(start->outputs, prev->outputs, sizeof(start->outputs)) != 0 ||
-       start->depthOut != prev->depthOut)
+    if(start->outputs != prev->outputs || start->depthOut != prev->depthOut)
       break;
 
     start = prev;
@@ -2765,11 +2837,14 @@ void D3D12Replay::FillCBufferVariables(ResourceId pipeline, ResourceId shader, r
 
   bytebuf rootData;
 
+  ShaderStageMask reflMask = MaskForStage(refl.stage);
+
   for(size_t i = 0; sig && i < sig->sig.Parameters.size(); i++)
   {
     const D3D12RootSignatureParameter &p = sig->sig.Parameters[i];
 
     if(p.ParameterType == D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS &&
+       (ToShaderStageMask(p.ShaderVisibility) & reflMask) &&
        p.Constants.RegisterSpace == (UINT)bind.bindset &&
        p.Constants.ShaderRegister == (UINT)bind.bind)
     {
@@ -3786,21 +3861,19 @@ ReplayStatus D3D12_CreateReplayDevice(RDCFile *rdc, const ReplayOptions &opts, I
   // succeed on subsequent capture loads.
   static bool d3d12on7 = false;
 
-  HMODULE d3d12lib = NULL;
-  d3d12lib = LoadLibraryA("d3d12.dll");
-  if(d3d12lib == NULL)
+  D3D12Lib = LoadLibraryA("d3d12.dll");
+  if(D3D12Lib == NULL)
   {
     // if it fails try to find D3D12On7 DLLs
     d3d12on7 = true;
 
     // if it fails, try in the plugin directory
-    d3d12lib = (HMODULE)Process::LoadModule(LocatePluginFile("d3d12", "d3d12.dll").c_str());
+    D3D12Lib = (HMODULE)Process::LoadModule(LocatePluginFile("d3d12", "d3d12.dll"));
 
     // if that succeeded, also load dxilconv7.dll from there
-    if(d3d12lib)
+    if(D3D12Lib)
     {
-      HMODULE dxilconv =
-          (HMODULE)Process::LoadModule(LocatePluginFile("d3d12", "dxilconv7.dll").c_str());
+      HMODULE dxilconv = (HMODULE)Process::LoadModule(LocatePluginFile("d3d12", "dxilconv7.dll"));
 
       if(!dxilconv)
       {
@@ -3811,9 +3884,9 @@ ReplayStatus D3D12_CreateReplayDevice(RDCFile *rdc, const ReplayOptions &opts, I
     else
     {
       // if it failed, try one more time in MS's subfolder convention
-      d3d12lib = LoadLibraryA("12on7/d3d12.dll");
+      D3D12Lib = LoadLibraryA("12on7/d3d12.dll");
 
-      if(d3d12lib)
+      if(D3D12Lib)
       {
         RDCWARN(
             "Loaded d3d12.dll from 12on7 subfolder."
@@ -3831,7 +3904,7 @@ ReplayStatus D3D12_CreateReplayDevice(RDCFile *rdc, const ReplayOptions &opts, I
   }
 
   PFN_D3D12_CREATE_DEVICE createDevicePtr =
-      (PFN_D3D12_CREATE_DEVICE)GetProcAddress(d3d12lib, "D3D12CreateDevice");
+      (PFN_D3D12_CREATE_DEVICE)GetProcAddress(D3D12Lib, "D3D12CreateDevice");
 
   RealD3D12CreateFunction createDevice = createDevicePtr;
 
@@ -3849,6 +3922,7 @@ ReplayStatus D3D12_CreateReplayDevice(RDCFile *rdc, const ReplayOptions &opts, I
   }
 
   D3D12InitParams initParams;
+  bytebuf D3D12Core;
 
   uint64_t ver = D3D12InitParams::CurrentVersion;
 
@@ -3896,10 +3970,32 @@ ReplayStatus D3D12_CreateReplayDevice(RDCFile *rdc, const ReplayOptions &opts, I
              ToStr(GPUVendorFromPCIVendor(initParams.AdapterDesc.VendorId)).c_str(),
              initParams.AdapterDesc.Description);
 
+    sectionIdx = rdc->SectionIndex(SectionType::D3D12Core);
+
+    if(sectionIdx >= 0)
+    {
+      SectionProperties props = rdc->GetSectionProperties(sectionIdx);
+      reader = rdc->ReadSection(sectionIdx);
+
+      D3D12Core.resize((size_t)props.uncompressedSize);
+      reader->Read(D3D12Core.data(), props.uncompressedSize);
+
+      RDCASSERT(reader->AtEnd());
+      delete reader;
+    }
+  }
+
+  if(initParams.MinimumFeatureLevel < D3D_FEATURE_LEVEL_11_0)
+    initParams.MinimumFeatureLevel = D3D_FEATURE_LEVEL_11_0;
+
+  D3D12_PrepareReplaySDKVersion(initParams.SDKVersion, D3D12Core, D3D12Lib);
+
+  if(rdc)
+  {
     using PFN_ENABLE_EXPERIMENTAL = decltype(&D3D12EnableExperimentalFeatures);
 
     PFN_ENABLE_EXPERIMENTAL EnableExperimental =
-        (PFN_ENABLE_EXPERIMENTAL)GetProcAddress(d3d12lib, "D3D12EnableExperimentalFeatures");
+        (PFN_ENABLE_EXPERIMENTAL)GetProcAddress(D3D12Lib, "D3D12EnableExperimentalFeatures");
 
     if(EnableExperimental)
     {
@@ -3914,9 +4010,6 @@ ReplayStatus D3D12_CreateReplayDevice(RDCFile *rdc, const ReplayOptions &opts, I
       RDCLOG("Couldn't get D3D12EnableExperimentalFeatures");
     }
   }
-
-  if(initParams.MinimumFeatureLevel < D3D_FEATURE_LEVEL_11_0)
-    initParams.MinimumFeatureLevel = D3D_FEATURE_LEVEL_11_0;
 
   const bool isProxy = (rdc == NULL);
 
@@ -3991,11 +4084,6 @@ ReplayStatus D3D12_CreateReplayDevice(RDCFile *rdc, const ReplayOptions &opts, I
            ToStr(initParams.MinimumFeatureLevel).c_str());
 
   bool shouldEnableDebugLayer = opts.apiValidation;
-
-// in development builds, always enable debug layer during replay
-#if ENABLED(RDOC_DEVEL)
-  shouldEnableDebugLayer = true;
-#endif
 
   if(shouldEnableDebugLayer)
   {

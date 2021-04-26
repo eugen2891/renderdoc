@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -268,12 +268,12 @@ RenderOutputSubresource GLReplay::GetRenderOutputSubresource(ResourceId id)
 
     if(res == details.resource)
     {
-      GetFramebufferMipAndLayer(curDrawFBO, att, (GLint *)&ret.mip, (GLint *)&ret.slice);
-
       ret.numSlices = 1;
 
       if(type == eGL_TEXTURE)
       {
+        GetFramebufferMipAndLayer(curDrawFBO, att, (GLint *)&ret.mip, (GLint *)&ret.slice);
+
         // desktop GL allows layered attachments which attach all slices from 0 to N
         if(!IsGLES)
         {
@@ -297,6 +297,11 @@ RenderOutputSubresource GLReplay::GetRenderOutputSubresource(ResourceId id)
               ret.numSlices = numViews;
           }
         }
+      }
+      else
+      {
+        ret.mip = 0;
+        ret.slice = 0;
       }
     }
   }
@@ -380,6 +385,8 @@ ResourceId GLReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, Debug
 
   if(rs.Program.name == 0 && rs.Pipeline.name == 0)
     return ResourceId();
+
+  GL.glBindBuffer(eGL_PIXEL_UNPACK_BUFFER, 0);
 
   // use our overlay program that we'll fill up with all the right
   // shaders, then replace the fragment shader with our own.
@@ -730,6 +737,7 @@ ResourceId GLReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, Debug
       drv.glGetIntegerv(eGL_ELEMENT_ARRAY_BUFFER_BINDING, &idxbuf);
 
       const DrawcallDescription *draw = m_pDriver->GetDrawcall(eventId);
+      const GLDrawParams &drawParams = m_pDriver->GetDrawcallParameters(eventId);
 
       rdcarray<uint32_t> patchedIndices;
 
@@ -737,7 +745,7 @@ ResourceId GLReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, Debug
       if(idxbuf)
       {
         rdcarray<byte> idxs;
-        uint32_t offset = draw->indexOffset * draw->indexByteWidth;
+        uint32_t offset = draw->indexOffset * drawParams.indexWidth;
         uint32_t length = 1;
         drv.glGetNamedBufferParameterivEXT(idxbuf, eGL_BUFFER_SIZE, (GLint *)&length);
 
@@ -745,13 +753,13 @@ ResourceId GLReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, Debug
         drv.glGetBufferSubData(
             eGL_ELEMENT_ARRAY_BUFFER, offset,
             RDCMIN(GLsizeiptr(length - offset),
-                   GLsizeiptr(draw->numIndices) * GLsizeiptr(draw->indexByteWidth)),
+                   GLsizeiptr(draw->numIndices) * GLsizeiptr(drawParams.indexWidth)),
             &idxs[0]);
 
         // unbind the real index buffer
         drv.glBindBuffer(eGL_ELEMENT_ARRAY_BUFFER, 0);
 
-        uint32_t expectedSize = draw->numIndices * draw->indexByteWidth;
+        uint32_t expectedSize = draw->numIndices * drawParams.indexWidth;
 
         if(idxs.size() < expectedSize)
         {
@@ -760,9 +768,10 @@ ResourceId GLReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, Debug
         }
 
         PatchLineStripIndexBuffer(
-            draw, draw->indexByteWidth == 1 ? (uint8_t *)idxs.data() : (uint8_t *)NULL,
-            draw->indexByteWidth == 2 ? (uint16_t *)idxs.data() : (uint16_t *)NULL,
-            draw->indexByteWidth == 4 ? (uint32_t *)idxs.data() : (uint32_t *)NULL, patchedIndices);
+            draw, drawParams.topo,
+            drawParams.indexWidth == 1 ? (uint8_t *)idxs.data() : (uint8_t *)NULL,
+            drawParams.indexWidth == 2 ? (uint16_t *)idxs.data() : (uint16_t *)NULL,
+            drawParams.indexWidth == 4 ? (uint32_t *)idxs.data() : (uint32_t *)NULL, patchedIndices);
       }
       else
       {
@@ -771,7 +780,7 @@ ResourceId GLReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, Debug
         idxs.resize(draw->numIndices);
         for(uint32_t i = 0; i < draw->numIndices; i++)
           idxs[i] = i;
-        PatchLineStripIndexBuffer(draw, NULL, NULL, idxs.data(), patchedIndices);
+        PatchLineStripIndexBuffer(draw, drawParams.topo, NULL, NULL, idxs.data(), patchedIndices);
       }
 
       GLboolean primRestart = drv.glIsEnabled(eGL_PRIMITIVE_RESTART_FIXED_INDEX);
@@ -942,7 +951,7 @@ ResourceId GLReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, Debug
     else
       drv.glDisable(eGL_SCISSOR_TEST);
 
-    float backCol[] = {0.0f, 1.0f, 0.0f, 0.0f};
+    float backCol[] = {0.0f, 0.0f, 0.0f, 0.0f};
     drv.glClearBufferfv(eGL_COLOR, 0, backCol);
 
     if(HasExt[ARB_viewport_array])
@@ -997,6 +1006,24 @@ ResourceId GLReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, Debug
       {
         ResourceId id = m_pDriver->GetResourceManager()->GetResID(RenderbufferRes(ctx, curDepth));
         fmt = m_pDriver->m_Textures[id].internalFormat;
+
+        GLint depth = 0;
+        GLint stencil = 0;
+        GL.glGetNamedRenderbufferParameterivEXT(curDepth, eGL_RENDERBUFFER_DEPTH_SIZE, &depth);
+        GL.glGetNamedRenderbufferParameterivEXT(curDepth, eGL_RENDERBUFFER_STENCIL_SIZE, &stencil);
+
+        if(depth == 16 && stencil == 0)
+          fmt = eGL_DEPTH_COMPONENT16;
+        else if(depth == 24 && stencil == 0)
+          fmt = eGL_DEPTH_COMPONENT24;
+        else if(depth == 24 && stencil == 8)
+          fmt = eGL_DEPTH24_STENCIL8;
+        else if(depth == 32 && stencil == 0)
+          fmt = eGL_DEPTH_COMPONENT32F;
+        else if(depth == 32 && stencil == 8)
+          fmt = eGL_DEPTH32F_STENCIL8;
+        else if(depth == 0 && stencil == 8)
+          fmt = eGL_STENCIL_INDEX8;
       }
 
       if(copyBindingEnum == eGL_TEXTURE_CUBE_MAP)
@@ -1086,6 +1113,24 @@ ResourceId GLReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, Debug
       {
         ResourceId id = m_pDriver->GetResourceManager()->GetResID(RenderbufferRes(ctx, curDepth));
         fmt = m_pDriver->m_Textures[id].internalFormat;
+
+        GLint depth = 0;
+        GLint stencil = 0;
+        GL.glGetNamedRenderbufferParameterivEXT(curDepth, eGL_RENDERBUFFER_DEPTH_SIZE, &depth);
+        GL.glGetNamedRenderbufferParameterivEXT(curDepth, eGL_RENDERBUFFER_STENCIL_SIZE, &stencil);
+
+        if(depth == 16 && stencil == 0)
+          fmt = eGL_DEPTH_COMPONENT16;
+        else if(depth == 24 && stencil == 0)
+          fmt = eGL_DEPTH_COMPONENT24;
+        else if(depth == 24 && stencil == 8)
+          fmt = eGL_DEPTH24_STENCIL8;
+        else if(depth == 32 && stencil == 0)
+          fmt = eGL_DEPTH_COMPONENT32F;
+        else if(depth == 32 && stencil == 8)
+          fmt = eGL_DEPTH32F_STENCIL8;
+        else if(depth == 0 && stencil == 8)
+          fmt = eGL_STENCIL_INDEX8;
       }
 
       GLuint curTex = 0;
@@ -1233,7 +1278,7 @@ ResourceId GLReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, Debug
     else
       drv.glDisable(eGL_SCISSOR_TEST);
 
-    float col[] = {0.0f, 1.0f, 0.0f, 0.0f};
+    float col[] = {0.0f, 0.0f, 0.0f, 0.0f};
     drv.glClearBufferfv(eGL_COLOR, 0, col);
 
     if(HasExt[ARB_viewport_array])

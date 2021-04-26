@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -25,6 +25,7 @@
 #include "ConstantBufferPreviewer.h"
 #include <QFontDatabase>
 #include <QTextStream>
+#include "Code/QRDUtils.h"
 #include "toolwindowmanager/ToolWindowManager.h"
 #include "ui_ConstantBufferPreviewer.h"
 
@@ -56,7 +57,7 @@ ConstantBufferPreviewer::ConstantBufferPreviewer(ICaptureContext &ctx, const Sha
     ui->variables->header()->setSectionResizeMode(2, QHeaderView::Interactive);
   }
 
-  ui->variables->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+  ui->variables->setFont(Formatter::FixedFont());
 
   m_Previews.push_back(this);
   m_Ctx.AddCaptureViewer(this);
@@ -106,13 +107,14 @@ void ConstantBufferPreviewer::OnEventChanged(uint32_t eventId)
   m_cbuffer = cb.resourceId;
   uint64_t offset = cb.byteOffset;
   uint64_t size = cb.byteSize;
+  bytebuf inlineData = cb.inlineData;
 
   ResourceId prevShader = m_shader;
 
   m_pipe = m_stage == ShaderStage::Compute ? m_Ctx.CurPipelineState().GetComputePipelineObject()
                                            : m_Ctx.CurPipelineState().GetGraphicsPipelineObject();
   m_shader = m_Ctx.CurPipelineState().GetShader(m_stage);
-  QString entryPoint = m_Ctx.CurPipelineState().GetShaderEntryPoint(m_stage);
+  rdcstr entryPoint = m_Ctx.CurPipelineState().GetShaderEntryPoint(m_stage);
   const ShaderReflection *reflection = m_Ctx.CurPipelineState().GetShaderReflection(m_stage);
 
   bool wasEmpty = ui->variables->topLevelItemCount() == 0;
@@ -135,33 +137,31 @@ void ConstantBufferPreviewer::OnEventChanged(uint32_t eventId)
 
   if(!m_formatOverride.type.members.empty())
   {
-    m_Ctx.Replay().AsyncInvoke([this, offset, size, wasEmpty](IReplayController *r) {
-      bytebuf data;
-      if(size > 0)
-        data = r->GetBufferData(m_cbuffer, offset, size);
-      rdcarray<ShaderVariable> vars = applyFormatOverride(data);
-      GUIInvoke::call(this, [this, vars, wasEmpty] {
-        RDTreeViewExpansionState state;
-        ui->variables->saveExpansion(state, 0);
-        setVariables(vars);
-        if(wasEmpty)
-        {
-          // Expand before resizing so that collapsed data will already be visible when expanded
-          ui->variables->expandAll();
-          for(int i = 0; i < 3; i++)
-            ui->variables->resizeColumnToContents(i);
-          ui->variables->collapseAll();
-        }
-        ui->variables->applyExpansion(state, 0);
+    if(!inlineData.empty() && m_cbuffer == ResourceId())
+    {
+      setVariablesPreserveExpansion(applyFormatOverride(inlineData), wasEmpty);
+    }
+    else
+    {
+      m_Ctx.Replay().AsyncInvoke([this, offset, size, wasEmpty](IReplayController *r) {
+        bytebuf data;
+
+        if(size > 0 && m_cbuffer != ResourceId())
+          data = r->GetBufferData(m_cbuffer, offset, size);
+
+        rdcarray<ShaderVariable> vars = applyFormatOverride(data);
+
+        GUIInvoke::call(this,
+                        [this, vars, wasEmpty] { setVariablesPreserveExpansion(vars, wasEmpty); });
       });
-    });
+    }
   }
   else
   {
     m_Ctx.Replay().AsyncInvoke(
         [this, prevShader, entryPoint, offset, size, wasEmpty](IReplayController *r) {
           rdcarray<ShaderVariable> vars = r->GetCBufferVariableContents(
-              m_pipe, m_shader, entryPoint.toUtf8().data(), m_slot, m_cbuffer, offset, size);
+              m_pipe, m_shader, entryPoint, m_slot, m_cbuffer, offset, size);
           GUIInvoke::call(this, [this, prevShader, vars, wasEmpty] {
 
             RDTreeViewExpansionState &prevShaderExpansionState =
@@ -324,6 +324,26 @@ void ConstantBufferPreviewer::setVariables(const rdcarray<ShaderVariable> &vars)
   }
 
   ui->variables->endUpdate();
+}
+
+void ConstantBufferPreviewer::setVariablesPreserveExpansion(const rdcarray<ShaderVariable> &vars,
+                                                            bool wasEmpty)
+{
+  RDTreeViewExpansionState state;
+  ui->variables->saveExpansion(state, 0);
+
+  setVariables(vars);
+
+  if(wasEmpty)
+  {
+    // Expand before resizing so that collapsed data will already be visible when expanded
+    ui->variables->expandAll();
+    for(int i = 0; i < 3; i++)
+      ui->variables->resizeColumnToContents(i);
+    ui->variables->collapseAll();
+  }
+
+  ui->variables->applyExpansion(state, 0);
 }
 
 void ConstantBufferPreviewer::updateLabels()

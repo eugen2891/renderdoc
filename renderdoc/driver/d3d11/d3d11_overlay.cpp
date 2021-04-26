@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -394,7 +394,7 @@ ResourceId D3D11Replay::RenderOverlay(ResourceId texid, FloatVector clearCol, De
       }
     }
 
-    float clearColour[] = {0.0f, 1.0f, 0.0f, 0.0f};
+    float clearColour[] = {0.0f, 0.0f, 0.0f, 0.0f};
     m_pImmediateContext->ClearRenderTargetView(rtv, clearColour);
 
     float overlayConsts[] = {1.0f, 0.0f, 0.0f, 1.0f};
@@ -475,7 +475,8 @@ ResourceId D3D11Replay::RenderOverlay(ResourceId texid, FloatVector clearCol, De
         return m_Overlay.resourceId;
       }
 
-      rdesc.ScissorEnable = TRUE;
+      if(origdesc.ScissorEnable)
+        rdesc.ScissorEnable = TRUE;
 
       hr = m_pDevice->CreateRasterizerState(&rdesc, &rsScissorOn);
       if(FAILED(hr))
@@ -1294,7 +1295,7 @@ ResourceId D3D11Replay::RenderOverlay(ResourceId texid, FloatVector clearCol, De
 
       m_pImmediateContext->OMSetBlendState(NULL, NULL, 0xffffffff);
 
-      float clearColour[] = {0.0f, 1.0f, 0.0f, 0.0f};
+      float clearColour[] = {0.0f, 0.0f, 0.0f, 0.0f};
       m_pImmediateContext->ClearRenderTargetView(rtv, clearColour);
 
       float redConsts[] = {255.0f / 255.0f, 0.0f / 255.0f, 0.0f / 255.0f, 255.0f / 255.0f};
@@ -1411,7 +1412,7 @@ ResourceId D3D11Replay::RenderOverlay(ResourceId texid, FloatVector clearCol, De
         }
       }
 
-      float clearColour[] = {0.0f, 1.0f, 0.0f, 0.0f};
+      float clearColour[] = {0.0f, 0.0f, 0.0f, 0.0f};
       m_pImmediateContext->ClearRenderTargetView(rtv, clearColour);
 
       float redConsts[] = {1.0f, 0.0f, 0.0f, 1.0f};

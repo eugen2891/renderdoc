@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -167,7 +167,7 @@ ShaderViewer::ShaderViewer(ICaptureContext &ctx, QWidget *parent)
 
     QAction *dim = new QAction(tr("Texture Dimensions Global"), this);
     QAction *mip = new QAction(tr("Selected Mip Global"), this);
-    QAction *slice = new QAction(tr("Seleted Array Slice / Cubemap Face Global"), this);
+    QAction *slice = new QAction(tr("Selected Array Slice / Cubemap Face Global"), this);
     QAction *sample = new QAction(tr("Selected Sample Global"), this);
     QAction *type = new QAction(tr("Texture Type Global"), this);
     QAction *samplers = new QAction(tr("Point && Linear Samplers"), this);
@@ -986,7 +986,7 @@ ShaderViewer *ShaderViewer::LoadEditor(ICaptureContext &ctx, QVariantMap data,
 
   {
     QVariant v = data[lit("id")];
-    RichResourceTextInitialise(v);
+    RichResourceTextInitialise(v, &ctx);
     id = v.value<ResourceId>();
   }
   ShaderStage stage = (ShaderStage)data[lit("stage")].toUInt();
@@ -1168,15 +1168,13 @@ ScintillaEdit *ShaderViewer::MakeEditor(const QString &name, const QString &text
 {
   ScintillaEdit *ret = new ScintillaEdit(this);
 
-  SetTextAndUpdateMargin0(ret, text);
-
   ret->setMarginLeft(4.0 * devicePixelRatioF());
   ret->setMarginWidthN(1, 0);
   ret->setMarginWidthN(2, 16.0 * devicePixelRatioF());
   ret->setObjectName(name);
 
-  ret->styleSetFont(STYLE_DEFAULT,
-                    QFontDatabase::systemFont(QFontDatabase::FixedFont).family().toUtf8().data());
+  ret->styleSetFont(STYLE_DEFAULT, Formatter::FixedFont().family().toUtf8().data());
+  ret->styleSetSize(STYLE_DEFAULT, Formatter::FixedFont().pointSize());
 
   // C# DarkGreen
   ret->indicSetFore(INDICATOR_REGHIGHLIGHT, SCINTILLA_COLOUR(0, 100, 0));
@@ -1197,6 +1195,8 @@ ScintillaEdit *ShaderViewer::MakeEditor(const QString &name, const QString &text
 
   ret->colourise(0, -1);
 
+  SetTextAndUpdateMargin0(ret, text);
+
   ret->emptyUndoBuffer();
 
   return ret;
@@ -1206,17 +1206,15 @@ void ShaderViewer::SetTextAndUpdateMargin0(ScintillaEdit *sc, const QString &tex
 {
   sc->setText(text.toUtf8().data());
 
-  sptr_t numlines = sc->lineCount();
+  int numLines = sc->lineCount();
 
-  int margin0width = 30;
-  if(numlines > 1000)
-    margin0width += 6;
-  if(numlines > 10000)
-    margin0width += 6;
+  // don't make the margin too narrow, it looks strange even if there are only 5 lines in a file
+  // we also add on an extra character for padding (with the *10)
+  numLines = qMax(1000, numLines * 10);
 
-  margin0width = int(margin0width * devicePixelRatioF());
+  sptr_t width = sc->textWidth(SC_MARGIN_RTEXT, QString::number(numLines).toUtf8().data());
 
-  sc->setMarginWidthN(0, margin0width);
+  sc->setMarginWidthN(0, int(width * devicePixelRatioF()));
 }
 
 void ShaderViewer::readonly_keyPressed(QKeyEvent *event)
@@ -1517,7 +1515,6 @@ void ShaderViewer::disassemble_typeChanged(int index)
     return;
 
   QString targetStr = m_DisassemblyType->currentText();
-  QByteArray target = targetStr.toUtf8();
 
   for(const ShaderProcessingTool &disasm : m_Ctx.Config().ShaderProcessors)
   {
@@ -1562,11 +1559,11 @@ void ShaderViewer::disassemble_typeChanged(int index)
 
   QPointer<ShaderViewer> me(this);
 
-  m_Ctx.Replay().AsyncInvoke([me, this, target](IReplayController *r) {
+  m_Ctx.Replay().AsyncInvoke([me, this, targetStr](IReplayController *r) {
     if(!me)
       return;
 
-    rdcstr disasm = r->DisassembleShader(m_Pipeline, m_ShaderDetails, target.data());
+    rdcstr disasm = r->DisassembleShader(m_Pipeline, m_ShaderDetails, targetStr);
 
     if(!me)
       return;
@@ -2434,7 +2431,7 @@ bool ShaderViewer::getVar(RDTreeWidgetItem *item, ShaderVariable *var, QString *
           if(mapping.type == VarType::Double || mapping.type == VarType::ULong)
             ret.value.u64v[i] = reg->value.u64v[r.component];
           else
-            ret.value.uv[i] = reg->value.uv[r.component];
+            ret.value.u32v[i] = reg->value.u32v[r.component];
         }
         else
         {
@@ -3315,27 +3312,27 @@ void ShaderViewer::updateWatchVariables()
 
               if(regcast == QLatin1Char('i'))
               {
-                val += Formatter::Format(var.value.iv[elindex]);
+                val += Formatter::Format(var.value.s32v[elindex]);
               }
               else if(regcast == QLatin1Char('f'))
               {
-                val += Formatter::Format(var.value.fv[elindex]);
+                val += Formatter::Format(var.value.f32v[elindex]);
               }
               else if(regcast == QLatin1Char('u'))
               {
-                val += Formatter::Format(var.value.uv[elindex]);
+                val += Formatter::Format(var.value.u32v[elindex]);
               }
               else if(regcast == QLatin1Char('x'))
               {
-                val += Formatter::Format(var.value.uv[elindex], true);
+                val += Formatter::Format(var.value.u32v[elindex], true);
               }
               else if(regcast == QLatin1Char('b'))
               {
-                val += QFormatStr("%1").arg(var.value.uv[elindex], 32, 2, QLatin1Char('0'));
+                val += QFormatStr("%1").arg(var.value.u32v[elindex], 32, 2, QLatin1Char('0'));
               }
               else if(regcast == QLatin1Char('d'))
               {
-                val += Formatter::Format(var.value.dv[elindex]);
+                val += Formatter::Format(var.value.f64v[elindex]);
               }
 
               if(s < swizzle.count() - 1)
@@ -3633,15 +3630,15 @@ RDTreeWidgetItem *ShaderViewer::makeSourceVariableNode(const SourceVariableMappi
           }
 
           if(l.type == VarType::UInt)
-            value += Formatter::Format(reg->value.uv[r.component]);
+            value += Formatter::Format(reg->value.u32v[r.component]);
           else if(l.type == VarType::SInt)
-            value += Formatter::Format(reg->value.iv[r.component]);
+            value += Formatter::Format(reg->value.s32v[r.component]);
           else if(l.type == VarType::Bool)
-            value += Formatter::Format(reg->value.uv[r.component] ? true : false);
+            value += Formatter::Format(reg->value.u32v[r.component] ? true : false);
           else if(l.type == VarType::Float)
-            value += Formatter::Format(reg->value.fv[r.component]);
+            value += Formatter::Format(reg->value.f32v[r.component]);
           else if(l.type == VarType::Double)
-            value += Formatter::Format(reg->value.dv[r.component]);
+            value += Formatter::Format(reg->value.f64v[r.component]);
         }
         else
         {
@@ -3917,7 +3914,7 @@ void ShaderViewer::SetCurrentStep(uint32_t step)
   updateDebugState();
 }
 
-void ShaderViewer::ToggleBreakpoint(int instruction)
+void ShaderViewer::ToggleBreakpoint(int32_t instruction)
 {
   if(!m_Trace || m_States.empty())
     return;
@@ -4096,12 +4093,20 @@ layout(binding = 0, std140) uniform RENDERDOC_Uniforms
 {
     uvec4 TexDim;
     uint SelectedMip;
-    int TextureType;
+    int TextureType; // 1 = 1D, 2 = 2D, 3 = 3D, 4 = 2DMS
     uint SelectedSliceFace;
     int SelectedSample;
     uvec4 YUVDownsampleRate;
     uvec4 YUVAChannels;
 } RENDERDOC;
+
+#define RENDERDOC_TexDim RENDERDOC.TexDim
+#define RENDERDOC_SelectedMip RENDERDOC.SelectedMip
+#define RENDERDOC_TextureType RENDERDOC.TextureType
+#define RENDERDOC_SelectedSliceFace RENDERDOC.SelectedSliceFace
+#define RENDERDOC_SelectedSample RENDERDOC.SelectedSample
+#define RENDERDOC_YUVDownsampleRate RENDERDOC.YUVDownsampleRate
+#define RENDERDOC_YUVAChannels RENDERDOC.YUVAChannels
 
 )");
   }
@@ -4112,7 +4117,7 @@ cbuffer RENDERDOC_Constants : register(b0)
 {
     uint4 RENDERDOC_TexDim;
     uint RENDERDOC_SelectedMip;
-    int RENDERDOC_TextureType;
+    int RENDERDOC_TextureType; // 1 = 1D, 2 = 2D, 3 = 3D, 4 = 2DMS
     uint RENDERDOC_SelectedSliceFace;
     int RENDERDOC_SelectedSample;
     uint4 RENDERDOC_YUVDownsampleRate;
@@ -4286,7 +4291,7 @@ void ShaderViewer::snippet_selectedType()
   {
     text = lit(R"(
 // 1 = 1D, 2 = 2D, 3 = 3D, 4 = Depth, 5 = Depth + Stencil
-// 6 = Depth (MS), 7 = Depth + Stencil (MS)
+// 6 = Depth (MS), 7 = Depth + Stencil (MS), 9 = 2DMS
 uint RENDERDOC_TextureType;
 
 )");
@@ -4296,7 +4301,7 @@ uint RENDERDOC_TextureType;
     text = lit(R"(
 // 1 = 1D, 2 = 2D, 3 = 3D, 4 = Cube
 // 5 = 1DArray, 6 = 2DArray, 7 = CubeArray
-// 8 = Rect, 9 = Buffer, 10 = 2DMS
+// 8 = Rect, 9 = Buffer, 10 = 2DMS, 11 = 2DMSArray
 uniform uint RENDERDOC_TextureType;
 
 )");
@@ -4355,13 +4360,13 @@ Texture3D<float4> texDisplayTex3D : register(t8);
 Texture2DMSArray<float4> texDisplayTex2DMSArray : register(t9);
 Texture2DArray<float4> texDisplayYUVArray : register(t10);
 
-// Unsigned int samplers
+// Unsigned int
 Texture1DArray<uint4> texDisplayUIntTex1DArray : register(t11);
 Texture2DArray<uint4> texDisplayUIntTex2DArray : register(t12);
 Texture3D<uint4> texDisplayUIntTex3D : register(t13);
 Texture2DMSArray<uint4> texDisplayUIntTex2DMSArray : register(t14);
 
-// Int samplers
+// Int
 Texture1DArray<int4> texDisplayIntTex1DArray : register(t16);
 Texture2DArray<int4> texDisplayIntTex2DArray : register(t17);
 Texture3D<int4> texDisplayIntTex3D : register(t18);
@@ -4383,13 +4388,13 @@ Texture2DMSArray<uint2> texDisplayTexStencilMSArray : register(t7);
 Texture2DMSArray<float4> texDisplayTex2DMSArray : register(t9);
 Texture2DArray<float4> texDisplayYUVArray : register(t10);
 
-// Unsigned int samplers
+// Unsigned int
 Texture1DArray<uint4> texDisplayUIntTex1DArray : register(t11);
 Texture2DArray<uint4> texDisplayUIntTex2DArray : register(t12);
 Texture3D<uint4> texDisplayUIntTex3D : register(t13);
 Texture2DMSArray<uint4> texDisplayUIntTex2DMSArray : register(t19);
 
-// Int samplers
+// Int
 Texture1DArray<int4> texDisplayIntTex1DArray : register(t21);
 Texture2DArray<int4> texDisplayIntTex2DArray : register(t22);
 Texture3D<int4> texDisplayIntTex3D : register(t23);
@@ -4440,6 +4445,7 @@ layout (binding = 6) uniform usampler2DArray texUInt2DArray;
 layout (binding = 8) uniform usampler2DRect texUInt2DRect;
 layout (binding = 9) uniform usamplerBuffer texUIntBuffer;
 layout (binding = 10) uniform usampler2DMS texUInt2DMS;
+layout (binding = 11) uniform usampler2DMSArray texUInt2DMSArray;
 
 // Int samplers
 layout (binding = 1) uniform isampler1D texSInt1D;
@@ -4452,6 +4458,7 @@ layout (binding = 6) uniform isampler2DArray texSInt2DArray;
 layout (binding = 8) uniform isampler2DRect texSInt2DRect;
 layout (binding = 9) uniform isamplerBuffer texSIntBuffer;
 layout (binding = 10) uniform isampler2DMS texSInt2DMS;
+layout (binding = 11) uniform isampler2DMSArray texSInt2DMSArray;
 
 // Floating point samplers
 layout (binding = 1) uniform sampler1D tex1D;
@@ -4464,6 +4471,7 @@ layout (binding = 7) uniform samplerCubeArray texCubeArray;
 layout (binding = 8) uniform sampler2DRect tex2DRect;
 layout (binding = 9) uniform samplerBuffer texBuffer;
 layout (binding = 10) uniform sampler2DMS tex2DMS;
+layout (binding = 11) uniform sampler2DMSArray tex2DMSArray;
 // End Textures
 )"));
     }
@@ -4609,25 +4617,25 @@ void ShaderViewer::updateVariableTooltip()
           "--------------------------------------------------------\n");
 
   text += QFormatStr("float | %1 %2 %3 %4\n")
-              .arg(Formatter::Format(var.value.fv[0]), 11)
-              .arg(Formatter::Format(var.value.fv[1]), 11)
-              .arg(Formatter::Format(var.value.fv[2]), 11)
-              .arg(Formatter::Format(var.value.fv[3]), 11);
+              .arg(Formatter::Format(var.value.f32v[0]), 11)
+              .arg(Formatter::Format(var.value.f32v[1]), 11)
+              .arg(Formatter::Format(var.value.f32v[2]), 11)
+              .arg(Formatter::Format(var.value.f32v[3]), 11);
   text += QFormatStr("uint  | %1 %2 %3 %4\n")
-              .arg(var.value.uv[0], 11, 10, QLatin1Char(' '))
-              .arg(var.value.uv[1], 11, 10, QLatin1Char(' '))
-              .arg(var.value.uv[2], 11, 10, QLatin1Char(' '))
-              .arg(var.value.uv[3], 11, 10, QLatin1Char(' '));
+              .arg(var.value.u32v[0], 11, 10, QLatin1Char(' '))
+              .arg(var.value.u32v[1], 11, 10, QLatin1Char(' '))
+              .arg(var.value.u32v[2], 11, 10, QLatin1Char(' '))
+              .arg(var.value.u32v[3], 11, 10, QLatin1Char(' '));
   text += QFormatStr("int   | %1 %2 %3 %4\n")
-              .arg(var.value.iv[0], 11, 10, QLatin1Char(' '))
-              .arg(var.value.iv[1], 11, 10, QLatin1Char(' '))
-              .arg(var.value.iv[2], 11, 10, QLatin1Char(' '))
-              .arg(var.value.iv[3], 11, 10, QLatin1Char(' '));
+              .arg(var.value.s32v[0], 11, 10, QLatin1Char(' '))
+              .arg(var.value.s32v[1], 11, 10, QLatin1Char(' '))
+              .arg(var.value.s32v[2], 11, 10, QLatin1Char(' '))
+              .arg(var.value.s32v[3], 11, 10, QLatin1Char(' '));
   text += QFormatStr("hex   |    %1    %2    %3    %4")
-              .arg(Formatter::HexFormat(var.value.uv[0], 4))
-              .arg(Formatter::HexFormat(var.value.uv[1], 4))
-              .arg(Formatter::HexFormat(var.value.uv[2], 4))
-              .arg(Formatter::HexFormat(var.value.uv[3], 4));
+              .arg(Formatter::HexFormat(var.value.u32v[0], 4))
+              .arg(Formatter::HexFormat(var.value.u32v[1], 4))
+              .arg(Formatter::HexFormat(var.value.u32v[2], 4))
+              .arg(Formatter::HexFormat(var.value.u32v[3], 4));
   text += lit("</pre>");
 
   QToolTip::showText(m_TooltipPos, text);

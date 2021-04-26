@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -110,6 +110,12 @@ Texture2D<float4> smiley : register(t5);
 
 RWByteAddressBuffer byterwtest : register(u1);
 RWStructuredBuffer<MyStruct> structrwtest : register(u2);
+
+Buffer<float> unboundsrv1 : register(t100);
+Texture2D<float> unboundsrv2 : register(t101);
+
+RWBuffer<float> unbounduav1 : register(u4);
+RWTexture2D<float> unbounduav2 : register(u5);
 
 SamplerState linearclamp : register(s0);
 SamplerState linearwrap : register(s1);
@@ -624,6 +630,45 @@ float4 main(v2f IN) : SV_Target0
   {
     float2 uv = posone * float2(1.81f, 0.48f) / zero;
     return smiley.Sample(linearclamp, uv);
+  }
+  if(IN.tri == 72)
+  {
+    return unboundsrv1[0].xxxx;
+  }
+  if(IN.tri == 73)
+  {
+    return unboundsrv2.Load(int3(0, 0, 0)).xxxx;
+  }
+  if(IN.tri == 74)
+  {
+    return unboundsrv2.Sample(linearclamp, float2(0, 0)).xxxx;
+  }
+  if(IN.tri == 75)
+  {
+    return unbounduav1[0].xxxx;
+  }
+  if(IN.tri == 76)
+  {
+    unbounduav1[1] = 1.234f;
+    return unbounduav1[1].xxxx;
+  }
+  if(IN.tri == 77)
+  {
+    unbounduav2[int2(0, 1)] = 1.234f;
+    return unbounduav2[int2(0, 1)].xxxx;
+  }
+  if(IN.tri == 78)
+  {
+    // use this to ensure the compiler doesn't know we're using fixed locations
+    uint z = intval - IN.tri - 7;
+    uint z2 = uint(zero);
+
+    // read first. This should be zero
+    float read_val = asfloat(byterwtest.Load(z2+100).x);
+
+    byterwtest.Store(z+100, asuint(1.2345f));
+
+    return read_val;
   }
 
   return float4(0.4f, 0.4f, 0.4f, 0.4f);

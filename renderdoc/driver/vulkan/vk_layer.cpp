@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -101,8 +101,8 @@ class VulkanHook : LibraryHook
     // we don't register any library or function hooks because we use the layer system
 
     // we assume the implicit layer is registered - the UI will prompt the user about installing it.
-    Process::RegisterEnvironmentModification(EnvironmentModification(
-        EnvMod::Set, EnvSep::NoSep, "ENABLE_VULKAN_RENDERDOC_CAPTURE", "1"));
+    Process::RegisterEnvironmentModification(
+        EnvironmentModification(EnvMod::Set, EnvSep::NoSep, RENDERDOC_VULKAN_LAYER_VAR, "1"));
 
     // RTSS layer is buggy, disable it to avoid bug reports that are caused by it
     Process::RegisterEnvironmentModification(
@@ -113,6 +113,12 @@ class VulkanHook : LibraryHook
     Process::RegisterEnvironmentModification(
         EnvironmentModification(EnvMod::Set, EnvSep::NoSep, "NODEVICE_SELECT", "1"));
 
+    Process::RegisterEnvironmentModification(EnvironmentModification(
+        EnvMod::Set, EnvSep::NoSep, "DISABLE_LAYER_AMD_SWITCHABLE_GRAPHICS_1", "1"));
+
+    Process::RegisterEnvironmentModification(EnvironmentModification(
+        EnvMod::Set, EnvSep::NoSep, "VK_LAYER_bandicam_helper_DEBUG_1", "1"));
+
 #if ENABLED(RDOC_WIN32)
     // on windows support self-hosted capture by checking our filename and tweaking the env var we
     // set
@@ -122,7 +128,7 @@ class VulkanHook : LibraryHook
     if(module_name != "RENDERDOC")
     {
       Process::RegisterEnvironmentModification(EnvironmentModification(
-          EnvMod::Set, EnvSep::NoSep, ("ENABLE_VULKAN_" + module_name + "_CAPTURE").c_str(), "1"));
+          EnvMod::Set, EnvSep::NoSep, "ENABLE_VULKAN_" + module_name + "_CAPTURE", "1"));
     }
 #endif
 
@@ -133,8 +139,8 @@ class VulkanHook : LibraryHook
   void RemoveHooks()
   {
     // unset the vulkan layer environment variable
-    Process::RegisterEnvironmentModification(EnvironmentModification(
-        EnvMod::Set, EnvSep::NoSep, "ENABLE_VULKAN_RENDERDOC_CAPTURE", "0"));
+    Process::RegisterEnvironmentModification(
+        EnvironmentModification(EnvMod::Set, EnvSep::NoSep, RENDERDOC_VULKAN_LAYER_VAR, "0"));
     Process::ApplyEnvironmentModification();
   }
 
@@ -142,12 +148,6 @@ class VulkanHook : LibraryHook
   {
     if(RenderDoc::Inst().GetCaptureOptions().apiValidation)
     {
-      Process::RegisterEnvironmentModification(
-          EnvironmentModification(EnvMod::Append, EnvSep::Platform, "VK_INSTANCE_LAYERS",
-                                  "VK_LAYER_LUNARG_standard_validation"));
-      Process::RegisterEnvironmentModification(
-          EnvironmentModification(EnvMod::Append, EnvSep::Platform, "VK_DEVICE_LAYERS",
-                                  "VK_LAYER_LUNARG_standard_validation"));
       Process::RegisterEnvironmentModification(EnvironmentModification(
           EnvMod::Append, EnvSep::Platform, "VK_INSTANCE_LAYERS", "VK_LAYER_KHRONOS_validation"));
       Process::RegisterEnvironmentModification(EnvironmentModification(

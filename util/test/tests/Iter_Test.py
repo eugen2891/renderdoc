@@ -82,8 +82,8 @@ class Iter_Test(rdtest.TestCase):
 
             mesh = rd.MeshFormat()
             mesh.indexResourceId = ib.resourceId
-            mesh.indexByteStride = draw.indexByteWidth
-            mesh.indexByteOffset = ib.byteOffset + draw.indexOffset * draw.indexByteWidth
+            mesh.indexByteStride = ib.byteStride
+            mesh.indexByteOffset = ib.byteOffset + draw.indexOffset * ib.byteStride
             mesh.indexByteSize = ib.byteSize
             mesh.baseVertex = draw.baseVertex
 
@@ -95,7 +95,7 @@ class Iter_Test(rdtest.TestCase):
 
             idx = indices[0]
 
-            striprestart_index = pipe.GetStripRestartIndex() & ((1 << (draw.indexByteWidth*8)) - 1)
+            striprestart_index = pipe.GetStripRestartIndex() & ((1 << (ib.byteStride*8)) - 1)
 
             if pipe.IsStripRestartEnabled() and idx == striprestart_index:
                 return
@@ -134,15 +134,16 @@ class Iter_Test(rdtest.TestCase):
 
                 compType = rd.VarTypeCompType(value.type)
                 if compType == rd.CompType.UInt:
-                    debugged = value.value.uv[0:value.columns]
+                    debugged = list(value.value.u32v[0:value.columns])
                 elif compType == rd.CompType.SInt:
-                    debugged = value.value.iv[0:value.columns]
+                    debugged = list(value.value.s32v[0:value.columns])
                 else:
-                    debugged = value.value.fv[0:value.columns]
+                    debugged = list(value.value.f32v[0:value.columns])
 
-                # For now, ignore debugged values that are uninitialised. This is an application bug but it causes false reports of problems
+                # For now, ignore debugged values that are uninitialised. This is an application bug but it causes false
+                # reports of problems
                 for comp in range(4):
-                    if value.value.uv[comp] == 0xcccccccc:
+                    if value.value.u32v[comp] == 0xcccccccc:
                         debugged[comp] = expect[comp]
 
                 # Unfortunately we can't ever trust that we should get back a matching results, because some shaders
@@ -271,11 +272,12 @@ class Iter_Test(rdtest.TestCase):
 
                     self.controller.FreeTrace(trace)
 
-                    debuggedValue = [debugged.value.f.x, debugged.value.f.y, debugged.value.f.z, debugged.value.f.w]
+                    debuggedValue = list(debugged.value.f32v[0:4])
 
-                    # For now, ignore debugged values that are uninitialised. This is an application bug but it causes false reports of problems
+                    # For now, ignore debugged values that are uninitialised. This is an application bug but it causes
+                    # false reports of problems
                     for idx in range(4):
-                        if debugged.value.uv[idx] == 0xcccccccc:
+                        if debugged.value.u32v[idx] == 0xcccccccc:
                             debuggedValue[idx] = lastmod.shaderOut.col.floatValue[idx]
 
                     # Unfortunately we can't ever trust that we should get back a matching results, because some shaders

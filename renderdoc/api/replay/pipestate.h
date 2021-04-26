@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -59,7 +59,7 @@ public:
   DOCUMENT(R"(Determines whether or not a capture is currently loaded.
 
 :return: A boolean indicating if a capture is currently loaded.
-:rtype: ``bool``
+:rtype: bool
 )");
   bool IsCaptureLoaded() const
   {
@@ -69,7 +69,7 @@ public:
   DOCUMENT(R"(Determines whether or not a D3D11 capture is currently loaded.
 
 :return: A boolean indicating if a D3D11 capture is currently loaded.
-:rtype: ``bool``
+:rtype: bool
 )");
   bool IsCaptureD3D11() const
   {
@@ -79,7 +79,7 @@ public:
   DOCUMENT(R"(Determines whether or not a D3D12 capture is currently loaded.
 
 :return: A boolean indicating if a D3D12 capture is currently loaded.
-:rtype: ``bool``
+:rtype: bool
 )");
   bool IsCaptureD3D12() const
   {
@@ -89,7 +89,7 @@ public:
   DOCUMENT(R"(Determines whether or not an OpenGL capture is currently loaded.
 
 :return: A boolean indicating if an OpenGL capture is currently loaded.
-:rtype: ``bool``
+:rtype: bool
 )");
   bool IsCaptureGL() const
   {
@@ -99,7 +99,7 @@ public:
   DOCUMENT(R"(Determines whether or not a Vulkan capture is currently loaded.
 
 :return: A boolean indicating if a Vulkan capture is currently loaded.
-:rtype: ``bool``
+:rtype: bool
 )");
   bool IsCaptureVK() const
   {
@@ -111,7 +111,7 @@ public:
   DOCUMENT(R"(Determines whether or not tessellation is currently enabled.
 
 :return: A boolean indicating if tessellation is currently enabled.
-:rtype: ``bool``
+:rtype: bool
 )");
   bool IsTessellationEnabled() const
   {
@@ -133,13 +133,16 @@ public:
     return false;
   }
 
-  DOCUMENT("Returns the number of views being broadcast to simultaneously during rendering.");
+  DOCUMENT(R"(
+:return: The number of views being broadcast to simultaneously during rendering.
+:rtype: int
+)");
   uint32_t MultiviewBroadcastCount() const;
 
   DOCUMENT(R"(Determines whether or not the current capture supports binding arrays of resources.
 
 :return: A boolean indicating if binding arrays of resources is supported.
-:rtype: ``bool``
+:rtype: bool
 )");
   bool SupportsResourceArrays() const
   {
@@ -148,7 +151,7 @@ public:
   DOCUMENT(R"(Determines whether or not the current capture uses explicit barriers.
 
 :return: A boolean indicating if explicit barriers are used.
-:rtype: ``bool``
+:rtype: bool
 )");
   bool SupportsBarriers() const { return IsCaptureLoaded() && (IsCaptureVK() || IsCaptureD3D12()); }
   DOCUMENT(R"(Determines whether or not the PostVS data is aligned in the typical fashion (ie.
@@ -158,7 +161,7 @@ requirements.
 
 :param MeshDataStage stage: The mesh data stage for the output data.
 :return: A boolean indicating if post-VS data is aligned.
-:rtype: ``bool``
+:rtype: bool
 )");
   bool HasAlignedPostVSData(MeshDataStage stage) const
   {
@@ -166,8 +169,9 @@ requirements.
   }
   DOCUMENT(R"(For APIs that have explicit barriers, retrieves the current layout of a resource.
 
-:return: The name of the current resource layout.
-:rtype: ``str``
+:param ResourceId id: The ID of the resource to query for
+:return: The name of the current layout of the first subresource in the resource.
+:rtype: str
 )");
   rdcstr GetResourceLayout(ResourceId id) const;
 
@@ -175,7 +179,7 @@ requirements.
 
 :param ShaderStage stage: The shader stage to abbreviate.
 :return: The abbreviation of the stage.
-:rtype: ``str``
+:rtype: str
 )");
   rdcstr Abbrev(ShaderStage stage) const;
 
@@ -183,7 +187,7 @@ requirements.
 'OM' or 'FBO'.
 
 :return: The abbreviation of the output stage.
-:rtype: ``str``
+:rtype: str
 )");
   rdcstr OutputAbbrev() const;
 
@@ -193,7 +197,7 @@ requirements.
 :return: The viewport for the given index.
 :rtype: Viewport
 )");
-  Viewport GetViewport(int index) const;
+  Viewport GetViewport(uint32_t index) const;
 
   DOCUMENT(R"(Retrieves the scissor region for a given index.
 
@@ -201,7 +205,7 @@ requirements.
 :return: The scissor region for the given index.
 :rtype: Scissor
 )");
-  Scissor GetScissor(int index) const;
+  Scissor GetScissor(uint32_t index) const;
 
   DOCUMENT(R"(Retrieves the current bindpoint mapping for a shader stage.
 
@@ -219,7 +223,7 @@ This returns ``None`` if no shader is bound.
 
 :param ShaderStage stage: The shader stage to fetch.
 :return: The reflection data for the given shader.
-:rtype: :class:`ShaderReflection` or ``None``
+:rtype: ShaderReflection
 )");
   const ShaderReflection *GetShaderReflection(ShaderStage stage) const;
 
@@ -243,7 +247,7 @@ For some APIs that don't distinguish by entry point, this may be empty.
 
 :param ShaderStage stage: The shader stage to fetch.
 :return: The entry point name for the given shader.
-:rtype: ``str``
+:rtype: str
 )");
   rdcstr GetShaderEntryPoint(ShaderStage stage) const;
 
@@ -255,39 +259,55 @@ For some APIs that don't distinguish by entry point, this may be empty.
 )");
   ResourceId GetShader(ShaderStage stage) const;
 
+  DOCUMENT(R"(Returns the current primitive topology.
+
+.. note::
+  On OpenGL the primitive topology is not part of any state, but is specified in each drawcall.
+  In this case the current topology is whichever was last specified to a drawcall, as if there was
+  implicit state set by a draw.
+
+:return: The current primitive topology.
+:rtype: Topology
+)");
+  Topology GetPrimitiveTopology() const;
+
   DOCUMENT(R"(Retrieves the current index buffer binding.
 
-:return: A :class:`BoundVBuffer` with the index buffer details. The stride is always 0.
-:rtype: ``BoundVBuffer``
+.. note::
+  On OpenGL the index stride/width is not part of any state, but is specified in each drawcall.
+  In this case the current stride is whichever was last specified to a drawcall, as if there was
+  implicit state set by a draw.
+
+:return: A :class:`BoundVBuffer` with the index buffer details
+:rtype: BoundVBuffer
 )");
   BoundVBuffer GetIBuffer() const;
 
   DOCUMENT(R"(Determines whether or not primitive restart is enabled.
 
 :return: A boolean indicating if primitive restart is enabled.
-:rtype: ``bool``
+:rtype: bool
 )");
   bool IsStripRestartEnabled() const;
 
   DOCUMENT(R"(Retrieves the primitive restart index.
 
-:param int indexByteWidth: The width in bytes of the indices.
 :return: The index value that represents a strip restart not a real index.
-:rtype: ``int``
+:rtype: int
 )");
   uint32_t GetStripRestartIndex() const;
 
   DOCUMENT(R"(Retrieves the currently bound vertex buffers.
 
 :return: The list of bound vertex buffers.
-:rtype: ``list`` of :class:`BoundVBuffer`.
+:rtype: List[BoundVBuffer]
 )");
   rdcarray<BoundVBuffer> GetVBuffers() const;
 
   DOCUMENT(R"(Retrieves the currently specified vertex attributes.
 
 :return: The list of current vertex attributes.
-:rtype: ``list`` of :class:`VertexInputAttribute`.
+:rtype: List[VertexInputAttribute]
 )");
   rdcarray<VertexInputAttribute> GetVertexInputs() const;
 
@@ -308,7 +328,7 @@ For some APIs that don't distinguish by entry point, this may be empty.
 :param bool onlyUsed: Return only a subset of resources containing those actually used by the
   shader.
 :return: The currently bound read-only resources.
-:rtype: ``list`` of :class:`BoundResourceArray` entries
+:rtype: List[BoundResourceArray]
 )");
   rdcarray<BoundResourceArray> GetReadOnlyResources(ShaderStage stage, bool onlyUsed = false) const;
 
@@ -316,7 +336,7 @@ For some APIs that don't distinguish by entry point, this may be empty.
 
 :param ShaderStage stage: The shader stage to fetch from.
 :return: The currently bound sampler resources.
-:rtype: ``list`` of :class:`BoundResourceArray` entries
+:rtype: List[BoundResourceArray]
 )");
   rdcarray<BoundResourceArray> GetSamplers(ShaderStage stage) const;
 
@@ -326,7 +346,7 @@ For some APIs that don't distinguish by entry point, this may be empty.
 :param bool onlyUsed: Return only a subset of resources containing those actually used by the
   shader.
 :return: The currently bound read/write resources.
-:rtype: ``list`` of :class:`BoundResourceArray` entries
+:rtype: List[BoundResourceArray]
 )");
   rdcarray<BoundResourceArray> GetReadWriteResources(ShaderStage stage, bool onlyUsed = false) const;
 
@@ -340,21 +360,28 @@ For some APIs that don't distinguish by entry point, this may be empty.
   DOCUMENT(R"(Retrieves the resources bound to the color outputs.
 
 :return: The currently bound output targets.
-:rtype: ``list`` of :class:`BoundResource`.
+:rtype: List[BoundResource]
 )");
   rdcarray<BoundResource> GetOutputTargets() const;
 
   DOCUMENT(R"(Retrieves the current color blending states, per target.
 
 :return: The currently color blend states.
-:rtype: ``list`` of :class:`ColorBlend`.
+:rtype: List[ColorBlend]
 )");
   rdcarray<ColorBlend> GetColorBlends() const;
+
+  DOCUMENT(R"(Retrieves the current stencil states.
+
+:return: The currently stencil states. Front facing first, back facing second.
+:rtype: Tuple[StencilFace, StencilFace]
+)");
+  rdcpair<StencilFace, StencilFace> GetStencilFaces() const;
 
   DOCUMENT(R"(Determines whether or not independent blending is enabled.
 
 :return: A boolean indicating if independent blending is enabled.
-:rtype: ``bool``
+:rtype: bool
 )");
   bool IsIndependentBlendingEnabled() const;
 

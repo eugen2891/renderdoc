@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -53,7 +53,7 @@ struct VkInitParams
   uint64_t GetSerialiseSize();
 
   // check if a frame capture section version is supported
-  static const uint64_t CurrentVersion = 0x12;
+  static const uint64_t CurrentVersion = 0x13;
   static bool IsSupportedVersion(uint64_t ver);
 };
 
@@ -309,8 +309,9 @@ private:
   uint64_t tempMemoryTLSSlot;
   struct TempMem
   {
-    TempMem() : memory(NULL), size(0) {}
+    TempMem() : memory(NULL), cur(NULL), size(0) {}
     byte *memory;
+    byte *cur;
     size_t size;
   };
   Threading::CriticalSection m_ThreadTempMemLock;
@@ -325,6 +326,9 @@ private:
   StreamReader *m_FrameReader = NULL;
 
   std::set<rdcstr> m_StringDB;
+
+  Threading::CriticalSection m_CapDescriptorsLock;
+  std::set<VkDescriptorSet> m_CapDescriptors;
 
   VkResourceRecord *m_FrameCaptureRecord;
   Chunk *m_HeaderChunk;
@@ -818,6 +822,12 @@ private:
 
   bytebuf m_MaskedMapData;
 
+  // on replay we may need to allocate several bits of temporary memory, so the single-region
+  // doesn't work as well. We're not quite as performance-sensitive so we allocate 4MB per thread
+  // and use it in a ring-buffer fashion. This allows multiple allocations to live at once as long
+  // as we don't need it all in one stack.
+  byte *GetRingTempMemory(size_t s);
+
   // returns thread-local temporary memory
   byte *GetTempMemory(size_t s);
   template <class T>
@@ -840,6 +850,9 @@ private:
   T UnwrapInfo(const T *info);
   template <class T>
   T *UnwrapInfos(const T *infos, uint32_t count);
+
+  void PatchAttachment(VkFramebufferAttachmentImageInfo *att, VkFormat imgFormat,
+                       VkSampleCountFlagBits samples);
 
   VkIndirectPatchData FetchIndirectData(VkIndirectPatchType type, VkCommandBuffer commandBuffer,
                                         VkBuffer dataBuffer, VkDeviceSize dataOffset, uint32_t count,
@@ -887,17 +900,6 @@ private:
 
   ResourceDescription &GetResourceDesc(ResourceId id);
 
-  bool Prepare_SparseInitialState(WrappedVkBuffer *buf);
-  bool Prepare_SparseInitialState(WrappedVkImage *im);
-  template <typename SerialiserType>
-  bool Serialise_SparseBufferInitialState(SerialiserType &ser, ResourceId id,
-                                          const VkInitialContents *contents);
-  template <typename SerialiserType>
-  bool Serialise_SparseImageInitialState(SerialiserType &ser, ResourceId id,
-                                         const VkInitialContents *contents);
-  bool Apply_SparseInitialState(WrappedVkBuffer *buf, const VkInitialContents &contents);
-  bool Apply_SparseInitialState(WrappedVkImage *im, const VkInitialContents &contents);
-
   void ApplyInitialContents();
 
   rdcarray<APIEvent> m_RootEvents, m_Events;
@@ -910,6 +912,8 @@ private:
   VulkanChunk m_LastChunk;
 
   ResourceId m_LastPresentedImage;
+
+  std::set<ResourceId> m_SparseBindResources;
 
   ReplayStatus m_FailedReplayStatus = ReplayStatus::APIReplayFailed;
 
@@ -924,6 +928,10 @@ private:
   bool PatchIndirectDraw(size_t drawIndex, uint32_t paramStride, VkIndirectPatchType type,
                          DrawcallDescription &draw, byte *&argptr, byte *argend);
   void InsertDrawsAndRefreshIDs(BakedCmdBufferInfo &cmdBufInfo);
+  void CaptureQueueSubmit(VkQueue queue, const rdcarray<VkCommandBuffer> &commandBuffers,
+                          VkFence fence);
+  void ReplayQueueSubmit(VkQueue queue, VkSubmitInfo2KHR submitInfo);
+  void DoSubmit(VkQueue queue, VkSubmitInfo2KHR submitInfo);
 
   rdcarray<VulkanDrawcallTreeNode *> m_DrawcallStack;
 
@@ -1007,7 +1015,6 @@ public:
   // replay interface
   bool Prepare_InitialState(WrappedVkRes *res);
   uint64_t GetSize_InitialState(ResourceId id, const VkInitialContents &initial);
-  uint64_t GetSize_SparseInitialState(ResourceId id, const VkInitialContents &initial);
   template <typename SerialiserType>
   bool Serialise_InitialState(SerialiserType &ser, ResourceId id, VkResourceRecord *record,
                               const VkInitialContents *initial);
@@ -2018,6 +2025,10 @@ public:
   IMPLEMENT_FUNCTION_SERIALISED(void, vkCmdWriteBufferMarkerAMD, VkCommandBuffer commandBuffer,
                                 VkPipelineStageFlagBits pipelineStage, VkBuffer dstBuffer,
                                 VkDeviceSize dstOffset, uint32_t marker);
+  // VK_KHR_synchronization2 interaction
+  IMPLEMENT_FUNCTION_SERIALISED(void, vkCmdWriteBufferMarker2AMD, VkCommandBuffer commandBuffer,
+                                VkPipelineStageFlags2KHR stage, VkBuffer dstBuffer,
+                                VkDeviceSize dstOffset, uint32_t marker);
 
   // VK_EXT_debug_utils
   IMPLEMENT_FUNCTION_SERIALISED(VkResult, vkSetDebugUtilsObjectNameEXT, VkDevice device,
@@ -2402,4 +2413,25 @@ public:
                                 const VkBlitImageInfo2KHR *pBlitImageInfo);
   IMPLEMENT_FUNCTION_SERIALISED(void, vkCmdResolveImage2KHR, VkCommandBuffer commandBuffer,
                                 const VkResolveImageInfo2KHR *pResolveImageInfo);
+
+  // VK_KHR_synchronization2
+  IMPLEMENT_FUNCTION_SERIALISED(void, vkCmdSetEvent2KHR, VkCommandBuffer commandBuffer,
+                                VkEvent event, const VkDependencyInfoKHR *pDependencyInfo);
+
+  IMPLEMENT_FUNCTION_SERIALISED(void, vkCmdResetEvent2KHR, VkCommandBuffer commandBuffer,
+                                VkEvent event, VkPipelineStageFlags2KHR stageMask);
+
+  IMPLEMENT_FUNCTION_SERIALISED(void, vkCmdWaitEvents2KHR, VkCommandBuffer commandBuffer,
+                                uint32_t eventCount, const VkEvent *pEvents,
+                                const VkDependencyInfoKHR *pDependencyInfos);
+
+  IMPLEMENT_FUNCTION_SERIALISED(void, vkCmdPipelineBarrier2KHR, VkCommandBuffer commandBuffer,
+                                const VkDependencyInfoKHR *pDependencyInfo);
+
+  IMPLEMENT_FUNCTION_SERIALISED(void, vkCmdWriteTimestamp2KHR, VkCommandBuffer commandBuffer,
+                                VkPipelineStageFlags2KHR stage, VkQueryPool queryPool,
+                                uint32_t query);
+
+  IMPLEMENT_FUNCTION_SERIALISED(VkResult, vkQueueSubmit2KHR, VkQueue queue, uint32_t submitCount,
+                                const VkSubmitInfo2KHR *pSubmits, VkFence fence);
 };

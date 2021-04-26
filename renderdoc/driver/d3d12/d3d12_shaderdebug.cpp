@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -65,13 +65,14 @@ class D3D12DebugAPIWrapper : public DXBCDebug::DebugAPIWrapper
 {
 public:
   D3D12DebugAPIWrapper(WrappedID3D12Device *device, const DXBC::DXBCContainer *dxbc,
-                       DXBCDebug::GlobalState &globalState);
+                       DXBCDebug::GlobalState &globalState, uint32_t eid);
+  ~D3D12DebugAPIWrapper();
 
   void SetCurrentInstruction(uint32_t instruction) { m_instruction = instruction; }
   void AddDebugMessage(MessageCategory c, MessageSeverity sv, MessageSource src, rdcstr d);
 
-  bool FetchSRV(const DXBCDebug::BindingSlot &slot);
-  bool FetchUAV(const DXBCDebug::BindingSlot &slot);
+  void FetchSRV(const DXBCDebug::BindingSlot &slot);
+  void FetchUAV(const DXBCDebug::BindingSlot &slot);
 
   bool CalculateMathIntrinsic(DXBCBytecode::OpcodeType opcode, const ShaderVariable &input,
                               ShaderVariable &output1, ShaderVariable &output2);
@@ -97,13 +98,28 @@ private:
   const DXBC::DXBCContainer *m_dxbc;
   DXBCDebug::GlobalState &m_globalState;
   uint32_t m_instruction;
+  uint32_t m_EventID;
+  bool m_DidReplay = false;
 };
 
 D3D12DebugAPIWrapper::D3D12DebugAPIWrapper(WrappedID3D12Device *device,
                                            const DXBC::DXBCContainer *dxbc,
-                                           DXBCDebug::GlobalState &globalState)
-    : m_pDevice(device), m_dxbc(dxbc), m_globalState(globalState), m_instruction(0)
+                                           DXBCDebug::GlobalState &globalState, uint32_t eid)
+    : m_pDevice(device), m_dxbc(dxbc), m_globalState(globalState), m_instruction(0), m_EventID(eid)
 {
+}
+
+D3D12DebugAPIWrapper::~D3D12DebugAPIWrapper()
+{
+  // if we replayed to before the draw for fetching some UAVs, replay back to after the draw to keep
+  // the state consistent.
+  if(m_DidReplay)
+  {
+    D3D12MarkerRegion region(m_pDevice->GetQueue()->GetReal(), "ResetReplay");
+    // replay the draw to get back to 'normal' state for this event, and mark that we need to
+    // replay back to pristine state next time we need to fetch data.
+    m_pDevice->ReplayLog(0, m_EventID, eReplay_OnlyDraw);
+  }
 }
 
 void D3D12DebugAPIWrapper::AddDebugMessage(MessageCategory c, MessageSeverity sv, MessageSource src,
@@ -112,7 +128,7 @@ void D3D12DebugAPIWrapper::AddDebugMessage(MessageCategory c, MessageSeverity sv
   m_pDevice->AddDebugMessage(c, sv, src, d);
 }
 
-bool D3D12DebugAPIWrapper::FetchSRV(const DXBCDebug::BindingSlot &slot)
+void D3D12DebugAPIWrapper::FetchSRV(const DXBCDebug::BindingSlot &slot)
 {
   const D3D12RenderState &rs = m_pDevice->GetQueue()->GetCommandData()->m_RenderState;
   D3D12ResourceManager *rm = m_pDevice->GetResourceManager();
@@ -130,6 +146,8 @@ bool D3D12DebugAPIWrapper::FetchSRV(const DXBCDebug::BindingSlot &slot)
   {
     pRootSignature = &rs.graphics;
   }
+
+  DXBCDebug::GlobalState::SRVData &srvData = m_globalState.srvs[slot];
 
   if(pRootSignature)
   {
@@ -150,20 +168,22 @@ bool D3D12DebugAPIWrapper::FetchSRV(const DXBCDebug::BindingSlot &slot)
           {
             // Found the requested SRV
             ID3D12Resource *pResource = rm->GetCurrentAs<ID3D12Resource>(element.id);
-            D3D12_RESOURCE_DESC resDesc = pResource->GetDesc();
 
-            DXBCDebug::GlobalState::SRVData &srvData = m_globalState.srvs[slot];
+            if(pResource)
+            {
+              D3D12_RESOURCE_DESC resDesc = pResource->GetDesc();
 
-            // TODO: Root buffers can be 32-bit UINT/SINT/FLOAT. Using UINT for now, but the
-            // resource desc format or the DXBC reflection info might be more correct.
-            DXBCDebug::FillViewFmt(DXGI_FORMAT_R32_UINT, srvData.format);
-            srvData.firstElement = (uint32_t)(element.offset / sizeof(uint32_t));
-            srvData.numElements = (uint32_t)((resDesc.Width - element.offset) / sizeof(uint32_t));
+              // TODO: Root buffers can be 32-bit UINT/SINT/FLOAT. Using UINT for now, but the
+              // resource desc format or the DXBC reflection info might be more correct.
+              DXBCDebug::FillViewFmt(DXGI_FORMAT_R32_UINT, srvData.format);
+              srvData.firstElement = (uint32_t)(element.offset / sizeof(uint32_t));
+              srvData.numElements = (uint32_t)((resDesc.Width - element.offset) / sizeof(uint32_t));
 
-            if(resDesc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER)
-              m_pDevice->GetDebugManager()->GetBufferData(pResource, 0, 0, srvData.data);
+              if(resDesc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER)
+                m_pDevice->GetDebugManager()->GetBufferData(pResource, 0, 0, srvData.data);
+            }
 
-            return true;
+            return;
           }
         }
         else if(param.ParameterType == D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE &&
@@ -210,54 +230,72 @@ bool D3D12DebugAPIWrapper::FetchSRV(const DXBCDebug::BindingSlot &slot)
               desc += slot.shaderRegister - range.BaseShaderRegister;
               if(desc)
               {
-                DXBCDebug::GlobalState::SRVData &srvData = m_globalState.srvs[slot];
                 ResourceId srvId = desc->GetResResourceId();
                 ID3D12Resource *pResource = rm->GetCurrentAs<ID3D12Resource>(srvId);
 
-                D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = desc->GetSRV();
-                if(srvDesc.ViewDimension == D3D12_SRV_DIMENSION_UNKNOWN)
-                  srvDesc = MakeSRVDesc(pResource->GetDesc());
+                if(pResource)
+                {
+                  D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = desc->GetSRV();
+                  if(srvDesc.ViewDimension == D3D12_SRV_DIMENSION_UNKNOWN)
+                    srvDesc = MakeSRVDesc(pResource->GetDesc());
 
-                if(srvDesc.Format != DXGI_FORMAT_UNKNOWN)
-                {
-                  DXBCDebug::FillViewFmt(srvDesc.Format, srvData.format);
-                }
-                else
-                {
-                  D3D12_RESOURCE_DESC resDesc = pResource->GetDesc();
-                  if(resDesc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER)
+                  if(srvDesc.Format != DXGI_FORMAT_UNKNOWN)
                   {
-                    srvData.format.stride = srvDesc.Buffer.StructureByteStride;
-
-                    // If we didn't get a type from the SRV description, try to pull it from the
-                    // shader reflection info
-                    DXBCDebug::LookupSRVFormatFromShaderReflection(*m_dxbc->GetReflection(), slot,
-                                                                   srvData.format);
+                    DXBCDebug::FillViewFmt(srvDesc.Format, srvData.format);
                   }
+                  else
+                  {
+                    D3D12_RESOURCE_DESC resDesc = pResource->GetDesc();
+                    if(resDesc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER)
+                    {
+                      srvData.format.stride = srvDesc.Buffer.StructureByteStride;
+
+                      // If we didn't get a type from the SRV description, try to pull it from the
+                      // shader reflection info
+                      DXBCDebug::LookupSRVFormatFromShaderReflection(*m_dxbc->GetReflection(), slot,
+                                                                     srvData.format);
+                    }
+                  }
+
+                  if(srvDesc.ViewDimension == D3D12_SRV_DIMENSION_BUFFER)
+                  {
+                    srvData.firstElement = (uint32_t)srvDesc.Buffer.FirstElement;
+                    srvData.numElements = srvDesc.Buffer.NumElements;
+
+                    m_pDevice->GetDebugManager()->GetBufferData(pResource, 0, 0, srvData.data);
+                  }
+
+                  // Textures are sampled via a pixel shader, so there's no need to copy their data
                 }
 
-                if(srvDesc.ViewDimension == D3D12_SRV_DIMENSION_BUFFER)
-                {
-                  srvData.firstElement = (uint32_t)srvDesc.Buffer.FirstElement;
-                  srvData.numElements = srvDesc.Buffer.NumElements;
-
-                  m_pDevice->GetDebugManager()->GetBufferData(pResource, 0, 0, srvData.data);
-                }
-                // Textures are sampled via a pixel shader, so there's no need to copy their data
-
-                return true;
+                return;
               }
             }
           }
         }
       }
     }
+
+    RDCERR("Couldn't find root signature parameter corresponding to SRV %u in space %u",
+           slot.shaderRegister, slot.registerSpace);
+    return;
   }
 
-  return false;
+  RDCERR("No root signature bound, couldn't identify SRV %u in space %u", slot.shaderRegister,
+         slot.registerSpace);
 }
-bool D3D12DebugAPIWrapper::FetchUAV(const DXBCDebug::BindingSlot &slot)
+
+void D3D12DebugAPIWrapper::FetchUAV(const DXBCDebug::BindingSlot &slot)
 {
+  // if the UAV might be dirty from side-effects from the draw, replay back to right
+  // before it.
+  if(!m_DidReplay)
+  {
+    D3D12MarkerRegion region(m_pDevice->GetQueue()->GetReal(), "un-dirtying resources");
+    m_pDevice->ReplayLog(0, m_EventID, eReplay_WithoutDraw);
+    m_DidReplay = true;
+  }
+
   const D3D12RenderState &rs = m_pDevice->GetQueue()->GetCommandData()->m_RenderState;
   D3D12ResourceManager *rm = m_pDevice->GetResourceManager();
 
@@ -274,6 +312,8 @@ bool D3D12DebugAPIWrapper::FetchUAV(const DXBCDebug::BindingSlot &slot)
   {
     pRootSignature = &rs.graphics;
   }
+
+  DXBCDebug::GlobalState::UAVData &uavData = m_globalState.uavs[slot];
 
   if(pRootSignature)
   {
@@ -294,20 +334,22 @@ bool D3D12DebugAPIWrapper::FetchUAV(const DXBCDebug::BindingSlot &slot)
           {
             // Found the requested UAV
             ID3D12Resource *pResource = rm->GetCurrentAs<ID3D12Resource>(element.id);
-            D3D12_RESOURCE_DESC resDesc = pResource->GetDesc();
 
-            DXBCDebug::GlobalState::UAVData &uavData = m_globalState.uavs[slot];
+            if(pResource)
+            {
+              D3D12_RESOURCE_DESC resDesc = pResource->GetDesc();
 
-            // TODO: Root buffers can be 32-bit UINT/SINT/FLOAT. Using UINT for now, but the
-            // resource desc format or the DXBC reflection info might be more correct.
-            DXBCDebug::FillViewFmt(DXGI_FORMAT_R32_UINT, uavData.format);
-            uavData.firstElement = (uint32_t)(element.offset / sizeof(uint32_t));
-            uavData.numElements = (uint32_t)((resDesc.Width - element.offset) / sizeof(uint32_t));
+              // TODO: Root buffers can be 32-bit UINT/SINT/FLOAT. Using UINT for now, but the
+              // resource desc format or the DXBC reflection info might be more correct.
+              DXBCDebug::FillViewFmt(DXGI_FORMAT_R32_UINT, uavData.format);
+              uavData.firstElement = (uint32_t)(element.offset / sizeof(uint32_t));
+              uavData.numElements = (uint32_t)((resDesc.Width - element.offset) / sizeof(uint32_t));
 
-            if(resDesc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER)
-              m_pDevice->GetDebugManager()->GetBufferData(pResource, 0, 0, uavData.data);
+              if(resDesc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER)
+                m_pDevice->GetDebugManager()->GetBufferData(pResource, 0, 0, uavData.data);
+            }
 
-            return true;
+            return;
           }
         }
         else if(param.ParameterType == D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE &&
@@ -354,59 +396,66 @@ bool D3D12DebugAPIWrapper::FetchUAV(const DXBCDebug::BindingSlot &slot)
               desc += slot.shaderRegister - range.BaseShaderRegister;
               if(desc)
               {
-                DXBCDebug::GlobalState::UAVData &uavData = m_globalState.uavs[slot];
                 ResourceId uavId = desc->GetResResourceId();
                 ID3D12Resource *pResource = rm->GetCurrentAs<ID3D12Resource>(uavId);
 
-                // TODO: Need to fetch counter resource if applicable
-
-                D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = desc->GetUAV();
-
-                if(uavDesc.ViewDimension == D3D12_UAV_DIMENSION_UNKNOWN)
-                  uavDesc = MakeUAVDesc(pResource->GetDesc());
-
-                if(uavDesc.Format != DXGI_FORMAT_UNKNOWN)
+                if(pResource)
                 {
-                  DXBCDebug::FillViewFmt(uavDesc.Format, uavData.format);
-                }
-                else
-                {
-                  D3D12_RESOURCE_DESC resDesc = pResource->GetDesc();
-                  if(resDesc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER)
+                  // TODO: Need to fetch counter resource if applicable
+
+                  D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = desc->GetUAV();
+
+                  if(uavDesc.ViewDimension == D3D12_UAV_DIMENSION_UNKNOWN)
+                    uavDesc = MakeUAVDesc(pResource->GetDesc());
+
+                  if(uavDesc.Format != DXGI_FORMAT_UNKNOWN)
                   {
-                    uavData.format.stride = uavDesc.Buffer.StructureByteStride;
+                    DXBCDebug::FillViewFmt(uavDesc.Format, uavData.format);
+                  }
+                  else
+                  {
+                    D3D12_RESOURCE_DESC resDesc = pResource->GetDesc();
+                    if(resDesc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER)
+                    {
+                      uavData.format.stride = uavDesc.Buffer.StructureByteStride;
 
-                    // TODO: Try looking up UAV from shader reflection info?
+                      // TODO: Try looking up UAV from shader reflection info?
+                    }
+                  }
+
+                  if(uavDesc.ViewDimension == D3D12_UAV_DIMENSION_BUFFER)
+                  {
+                    uavData.firstElement = (uint32_t)uavDesc.Buffer.FirstElement;
+                    uavData.numElements = uavDesc.Buffer.NumElements;
+
+                    m_pDevice->GetDebugManager()->GetBufferData(pResource, 0, 0, uavData.data);
+                  }
+                  else
+                  {
+                    uavData.tex = true;
+                    m_pDevice->GetReplay()->GetTextureData(uavId, Subresource(),
+                                                           GetTextureDataParams(), uavData.data);
+
+                    D3D12_RESOURCE_DESC resDesc = pResource->GetDesc();
+                    uavData.rowPitch = GetByteSize((int)resDesc.Width, 1, 1, uavDesc.Format, 0);
                   }
                 }
 
-                if(uavDesc.ViewDimension == D3D12_UAV_DIMENSION_BUFFER)
-                {
-                  uavData.firstElement = (uint32_t)uavDesc.Buffer.FirstElement;
-                  uavData.numElements = uavDesc.Buffer.NumElements;
-
-                  m_pDevice->GetDebugManager()->GetBufferData(pResource, 0, 0, uavData.data);
-                }
-                else
-                {
-                  uavData.tex = true;
-                  m_pDevice->GetReplay()->GetTextureData(uavId, Subresource(),
-                                                         GetTextureDataParams(), uavData.data);
-
-                  D3D12_RESOURCE_DESC resDesc = pResource->GetDesc();
-                  uavData.rowPitch = GetByteSize((int)resDesc.Width, 1, 1, uavDesc.Format, 0);
-                }
-
-                return true;
+                return;
               }
             }
           }
         }
       }
     }
+
+    RDCERR("Couldn't find root signature parameter corresponding to UAV %u in space %u",
+           slot.shaderRegister, slot.registerSpace);
+    return;
   }
 
-  return false;
+  RDCERR("No root signature bound, couldn't identify UAV %u in space %u", slot.shaderRegister,
+         slot.registerSpace);
 }
 
 bool D3D12DebugAPIWrapper::CalculateMathIntrinsic(DXBCBytecode::OpcodeType opcode,
@@ -442,7 +491,7 @@ bool D3D12DebugAPIWrapper::CalculateMathIntrinsic(DXBCBytecode::OpcodeType opcod
   m_pDevice->GetDebugManager()->SetDescriptorHeaps(cmdList, true, false);
   cmdList->SetPipelineState(m_pDevice->GetDebugManager()->GetMathIntrinsicsPso());
   cmdList->SetComputeRootSignature(m_pDevice->GetDebugManager()->GetMathIntrinsicsRootSig());
-  cmdList->SetComputeRoot32BitConstants(0, 4, &input.value.uv[0], 0);
+  cmdList->SetComputeRoot32BitConstants(0, 4, &input.value.u32v[0], 0);
   cmdList->SetComputeRoot32BitConstants(1, 1, &opcode, 0);
   cmdList->SetComputeRootUnorderedAccessView(2, pResultBuffer->GetGPUVirtualAddress());
   cmdList->Dispatch(1, 1, 1);
@@ -464,8 +513,8 @@ bool D3D12DebugAPIWrapper::CalculateMathIntrinsic(DXBCBytecode::OpcodeType opcod
   m_pDevice->GetDebugManager()->GetBufferData(pResultBuffer, 0, 0, results);
   RDCASSERT(results.size() >= sizeof(Vec4f) * 2);
 
-  memcpy(output1.value.uv, results.data(), sizeof(Vec4f));
-  memcpy(output2.value.uv, results.data() + sizeof(Vec4f), sizeof(Vec4f));
+  memcpy(output1.value.u32v.data(), results.data(), sizeof(Vec4f));
+  memcpy(output2.value.u32v.data(), results.data() + sizeof(Vec4f), sizeof(Vec4f));
 
   return true;
 }
@@ -491,10 +540,10 @@ ShaderVariable D3D12DebugAPIWrapper::GetSampleInfo(DXBCBytecode::OperandType typ
 
       ID3D12Resource *pResource = rm->GetCurrentAs<ID3D12Resource>(res);
       D3D12_RESOURCE_DESC resDesc = pResource->GetDesc();
-      result.value.u.x = resDesc.SampleDesc.Count;
-      result.value.u.y = 0;
-      result.value.u.z = 0;
-      result.value.u.w = 0;
+      result.value.u32v[0] = resDesc.SampleDesc.Count;
+      result.value.u32v[1] = 0;
+      result.value.u32v[2] = 0;
+      result.value.u32v[3] = 0;
     }
     return result;
   }
@@ -582,10 +631,10 @@ ShaderVariable D3D12DebugAPIWrapper::GetSampleInfo(DXBCBytecode::OperandType typ
                   if(srvDesc.ViewDimension == D3D12_SRV_DIMENSION_TEXTURE2DMS ||
                      srvDesc.ViewDimension == D3D12_SRV_DIMENSION_TEXTURE2DMSARRAY)
                   {
-                    result.value.u.x = resDesc.SampleDesc.Count;
-                    result.value.u.y = 0;
-                    result.value.u.z = 0;
-                    result.value.u.w = 0;
+                    result.value.u32v[0] = resDesc.SampleDesc.Count;
+                    result.value.u32v[1] = 0;
+                    result.value.u32v[2] = 0;
+                    result.value.u32v[3] = 0;
                   }
                   else
                   {
@@ -651,7 +700,8 @@ ShaderVariable D3D12DebugAPIWrapper::GetBufferInfo(DXBCBytecode::OperandType typ
 
             // Root descriptors are always buffers with each element 32-bit
             uint32_t numElements = (uint32_t)((resDesc.Width - element.offset) / sizeof(uint32_t));
-            result.value.u.x = result.value.u.y = result.value.u.z = result.value.u.w = numElements;
+            result.value.u32v[0] = result.value.u32v[1] = result.value.u32v[2] =
+                result.value.u32v[3] = numElements;
             return result;
           }
         }
@@ -667,7 +717,8 @@ ShaderVariable D3D12DebugAPIWrapper::GetBufferInfo(DXBCBytecode::OperandType typ
 
             // Root descriptors are always buffers with each element 32-bit
             uint32_t numElements = (uint32_t)((resDesc.Width - element.offset) / sizeof(uint32_t));
-            result.value.u.x = result.value.u.y = result.value.u.z = result.value.u.w = numElements;
+            result.value.u32v[0] = result.value.u32v[1] = result.value.u32v[2] =
+                result.value.u32v[3] = numElements;
             return result;
           }
         }
@@ -727,8 +778,8 @@ ShaderVariable D3D12DebugAPIWrapper::GetBufferInfo(DXBCBytecode::OperandType typ
 
                   if(uavDesc.ViewDimension == D3D12_UAV_DIMENSION_BUFFER)
                   {
-                    result.value.u.x = result.value.u.y = result.value.u.z = result.value.u.w =
-                        (uint32_t)uavDesc.Buffer.NumElements;
+                    result.value.u32v[0] = result.value.u32v[1] = result.value.u32v[2] =
+                        result.value.u32v[3] = (uint32_t)uavDesc.Buffer.NumElements;
                   }
                   return result;
                 }
@@ -744,8 +795,8 @@ ShaderVariable D3D12DebugAPIWrapper::GetBufferInfo(DXBCBytecode::OperandType typ
 
                   if(srvDesc.ViewDimension == D3D12_SRV_DIMENSION_BUFFER)
                   {
-                    result.value.u.x = result.value.u.y = result.value.u.z = result.value.u.w =
-                        (uint32_t)srvDesc.Buffer.NumElements;
+                    result.value.u32v[0] = result.value.u32v[1] = result.value.u32v[2] =
+                        result.value.u32v[3] = (uint32_t)srvDesc.Buffer.NumElements;
                   }
                   return result;
                 }
@@ -865,15 +916,15 @@ ShaderVariable D3D12DebugAPIWrapper::GetResourceInfo(DXBCBytecode::OperandType t
 
                       bool isarray = uavDesc.ViewDimension == D3D12_UAV_DIMENSION_TEXTURE1DARRAY;
 
-                      result.value.u.x = RDCMAX(1U, (uint32_t)(resDesc.Width >> mipLevel));
-                      result.value.u.y = isarray ? uavDesc.Texture1DArray.ArraySize : 0;
-                      result.value.u.z = 0;
+                      result.value.u32v[0] = RDCMAX(1U, (uint32_t)(resDesc.Width >> mipLevel));
+                      result.value.u32v[1] = isarray ? uavDesc.Texture1DArray.ArraySize : 0;
+                      result.value.u32v[2] = 0;
 
                       // spec says "For UAVs (u#), the number of mip levels is always 1."
-                      result.value.u.w = 1;
+                      result.value.u32v[3] = 1;
 
-                      if(mipLevel >= result.value.u.w)
-                        result.value.u.x = result.value.u.y = 0;
+                      if(mipLevel >= result.value.u32v[3])
+                        result.value.u32v[0] = result.value.u32v[1] = 0;
 
                       break;
                     }
@@ -882,19 +933,19 @@ ShaderVariable D3D12DebugAPIWrapper::GetResourceInfo(DXBCBytecode::OperandType t
                     {
                       dim = 2;
 
-                      result.value.u.x = RDCMAX(1U, (uint32_t)(resDesc.Width >> mipLevel));
-                      result.value.u.y = RDCMAX(1U, (uint32_t)(resDesc.Height >> mipLevel));
+                      result.value.u32v[0] = RDCMAX(1U, (uint32_t)(resDesc.Width >> mipLevel));
+                      result.value.u32v[1] = RDCMAX(1U, (uint32_t)(resDesc.Height >> mipLevel));
 
                       if(uavDesc.ViewDimension == D3D12_UAV_DIMENSION_TEXTURE2D)
-                        result.value.u.z = 0;
+                        result.value.u32v[2] = 0;
                       else if(uavDesc.ViewDimension == D3D12_UAV_DIMENSION_TEXTURE2DARRAY)
-                        result.value.u.z = uavDesc.Texture2DArray.ArraySize;
+                        result.value.u32v[2] = uavDesc.Texture2DArray.ArraySize;
 
                       // spec says "For UAVs (u#), the number of mip levels is always 1."
-                      result.value.u.w = 1;
+                      result.value.u32v[3] = 1;
 
-                      if(mipLevel >= result.value.u.w)
-                        result.value.u.x = result.value.u.y = result.value.u.z = 0;
+                      if(mipLevel >= result.value.u32v[3])
+                        result.value.u32v[0] = result.value.u32v[1] = result.value.u32v[2] = 0;
 
                       break;
                     }
@@ -902,15 +953,16 @@ ShaderVariable D3D12DebugAPIWrapper::GetResourceInfo(DXBCBytecode::OperandType t
                     {
                       dim = 3;
 
-                      result.value.u.x = RDCMAX(1U, (uint32_t)(resDesc.Width >> mipLevel));
-                      result.value.u.y = RDCMAX(1U, (uint32_t)(resDesc.Height >> mipLevel));
-                      result.value.u.z = RDCMAX(1U, (uint32_t)(resDesc.DepthOrArraySize >> mipLevel));
+                      result.value.u32v[0] = RDCMAX(1U, (uint32_t)(resDesc.Width >> mipLevel));
+                      result.value.u32v[1] = RDCMAX(1U, (uint32_t)(resDesc.Height >> mipLevel));
+                      result.value.u32v[2] =
+                          RDCMAX(1U, (uint32_t)(resDesc.DepthOrArraySize >> mipLevel));
 
                       // spec says "For UAVs (u#), the number of mip levels is always 1."
-                      result.value.u.w = 1;
+                      result.value.u32v[3] = 1;
 
-                      if(mipLevel >= result.value.u.w)
-                        result.value.u.x = result.value.u.y = result.value.u.z = 0;
+                      if(mipLevel >= result.value.u32v[3])
+                        result.value.u32v[0] = result.value.u32v[1] = result.value.u32v[2] = 0;
 
                       break;
                     }
@@ -942,14 +994,14 @@ ShaderVariable D3D12DebugAPIWrapper::GetResourceInfo(DXBCBytecode::OperandType t
 
                       bool isarray = srvDesc.ViewDimension == D3D12_SRV_DIMENSION_TEXTURE1DARRAY;
 
-                      result.value.u.x = RDCMAX(1U, (uint32_t)(resDesc.Width >> mipLevel));
-                      result.value.u.y = isarray ? srvDesc.Texture1DArray.ArraySize : 0;
-                      result.value.u.z = 0;
-                      result.value.u.w =
+                      result.value.u32v[0] = RDCMAX(1U, (uint32_t)(resDesc.Width >> mipLevel));
+                      result.value.u32v[1] = isarray ? srvDesc.Texture1DArray.ArraySize : 0;
+                      result.value.u32v[2] = 0;
+                      result.value.u32v[3] =
                           isarray ? srvDesc.Texture1DArray.MipLevels : srvDesc.Texture1D.MipLevels;
 
-                      if(mipLevel >= result.value.u.w)
-                        result.value.u.x = result.value.u.y = 0;
+                      if(mipLevel >= result.value.u32v[3])
+                        result.value.u32v[0] = result.value.u32v[1] = 0;
 
                       break;
                     }
@@ -959,31 +1011,31 @@ ShaderVariable D3D12DebugAPIWrapper::GetResourceInfo(DXBCBytecode::OperandType t
                     case D3D12_SRV_DIMENSION_TEXTURE2DMSARRAY:
                     {
                       dim = 2;
-                      result.value.u.x = RDCMAX(1U, (uint32_t)(resDesc.Width >> mipLevel));
-                      result.value.u.y = RDCMAX(1U, (uint32_t)(resDesc.Height >> mipLevel));
+                      result.value.u32v[0] = RDCMAX(1U, (uint32_t)(resDesc.Width >> mipLevel));
+                      result.value.u32v[1] = RDCMAX(1U, (uint32_t)(resDesc.Height >> mipLevel));
 
                       if(srvDesc.ViewDimension == D3D12_SRV_DIMENSION_TEXTURE2D)
                       {
-                        result.value.u.z = 0;
-                        result.value.u.w = srvDesc.Texture2D.MipLevels;
+                        result.value.u32v[2] = 0;
+                        result.value.u32v[3] = srvDesc.Texture2D.MipLevels;
                       }
                       else if(srvDesc.ViewDimension == D3D12_SRV_DIMENSION_TEXTURE2DARRAY)
                       {
-                        result.value.u.z = srvDesc.Texture2DArray.ArraySize;
-                        result.value.u.w = srvDesc.Texture2DArray.MipLevels;
+                        result.value.u32v[2] = srvDesc.Texture2DArray.ArraySize;
+                        result.value.u32v[3] = srvDesc.Texture2DArray.MipLevels;
                       }
                       else if(srvDesc.ViewDimension == D3D12_SRV_DIMENSION_TEXTURE2DMS)
                       {
-                        result.value.u.z = 0;
-                        result.value.u.w = 1;
+                        result.value.u32v[2] = 0;
+                        result.value.u32v[3] = 1;
                       }
                       else if(srvDesc.ViewDimension == D3D12_SRV_DIMENSION_TEXTURE2DMSARRAY)
                       {
-                        result.value.u.z = srvDesc.Texture2DMSArray.ArraySize;
-                        result.value.u.w = 1;
+                        result.value.u32v[2] = srvDesc.Texture2DMSArray.ArraySize;
+                        result.value.u32v[3] = 1;
                       }
-                      if(mipLevel >= result.value.u.w)
-                        result.value.u.x = result.value.u.y = result.value.u.z = 0;
+                      if(mipLevel >= result.value.u32v[3])
+                        result.value.u32v[0] = result.value.u32v[1] = result.value.u32v[2] = 0;
 
                       break;
                     }
@@ -991,13 +1043,14 @@ ShaderVariable D3D12DebugAPIWrapper::GetResourceInfo(DXBCBytecode::OperandType t
                     {
                       dim = 3;
 
-                      result.value.u.x = RDCMAX(1U, (uint32_t)(resDesc.Width >> mipLevel));
-                      result.value.u.y = RDCMAX(1U, (uint32_t)(resDesc.Height >> mipLevel));
-                      result.value.u.z = RDCMAX(1U, (uint32_t)(resDesc.DepthOrArraySize >> mipLevel));
-                      result.value.u.w = srvDesc.Texture3D.MipLevels;
+                      result.value.u32v[0] = RDCMAX(1U, (uint32_t)(resDesc.Width >> mipLevel));
+                      result.value.u32v[1] = RDCMAX(1U, (uint32_t)(resDesc.Height >> mipLevel));
+                      result.value.u32v[2] =
+                          RDCMAX(1U, (uint32_t)(resDesc.DepthOrArraySize >> mipLevel));
+                      result.value.u32v[3] = srvDesc.Texture3D.MipLevels;
 
-                      if(mipLevel >= result.value.u.w)
-                        result.value.u.x = result.value.u.y = result.value.u.z = 0;
+                      if(mipLevel >= result.value.u32v[3])
+                        result.value.u32v[0] = result.value.u32v[1] = result.value.u32v[2] = 0;
 
                       break;
                     }
@@ -1010,18 +1063,18 @@ ShaderVariable D3D12DebugAPIWrapper::GetResourceInfo(DXBCBytecode::OperandType t
 
                       bool isarray = srvDesc.ViewDimension == D3D12_SRV_DIMENSION_TEXTURECUBEARRAY;
 
-                      result.value.u.x = RDCMAX(1U, (uint32_t)(resDesc.Width >> mipLevel));
-                      result.value.u.y = RDCMAX(1U, (uint32_t)(resDesc.Height >> mipLevel));
+                      result.value.u32v[0] = RDCMAX(1U, (uint32_t)(resDesc.Width >> mipLevel));
+                      result.value.u32v[1] = RDCMAX(1U, (uint32_t)(resDesc.Height >> mipLevel));
 
                       // the spec says "If srcResource is a TextureCubeArray, [...]. dest.z is set
                       // to an undefined value."
                       // but that's stupid, and implementations seem to return the number of cubes
-                      result.value.u.z = isarray ? srvDesc.TextureCubeArray.NumCubes : 0;
-                      result.value.u.w = isarray ? srvDesc.TextureCubeArray.MipLevels
-                                                 : srvDesc.TextureCube.MipLevels;
+                      result.value.u32v[2] = isarray ? srvDesc.TextureCubeArray.NumCubes : 0;
+                      result.value.u32v[3] = isarray ? srvDesc.TextureCubeArray.MipLevels
+                                                     : srvDesc.TextureCube.MipLevels;
 
-                      if(mipLevel >= result.value.u.w)
-                        result.value.u.x = result.value.u.y = result.value.u.z = 0;
+                      if(mipLevel >= result.value.u32v[3])
+                        result.value.u32v[0] = result.value.u32v[1] = result.value.u32v[2] = 0;
 
                       break;
                     }
@@ -1232,10 +1285,10 @@ bool D3D12DebugAPIWrapper::CalculateSampleGather(
 
   for(uint32_t i = 0; i < ddxCalc.columns; i++)
   {
-    if(!RDCISFINITE(ddxCalc.value.fv[i]))
+    if(!RDCISFINITE(ddxCalc.value.f32v[i]))
     {
       RDCWARN("NaN or Inf in texlookup");
-      ddxCalc.value.fv[i] = 0.0f;
+      ddxCalc.value.f32v[i] = 0.0f;
 
       m_pDevice->AddDebugMessage(MessageCategory::Shaders, MessageSeverity::High,
                                  MessageSource::RuntimeWarning,
@@ -1243,10 +1296,10 @@ bool D3D12DebugAPIWrapper::CalculateSampleGather(
                                                    "texture lookup ddx - using 0.0 instead",
                                                    m_instruction, opString));
     }
-    if(!RDCISFINITE(ddyCalc.value.fv[i]))
+    if(!RDCISFINITE(ddyCalc.value.f32v[i]))
     {
       RDCWARN("NaN or Inf in texlookup");
-      ddyCalc.value.fv[i] = 0.0f;
+      ddyCalc.value.f32v[i] = 0.0f;
 
       m_pDevice->AddDebugMessage(MessageCategory::Shaders, MessageSeverity::High,
                                  MessageSource::RuntimeWarning,
@@ -1258,10 +1311,10 @@ bool D3D12DebugAPIWrapper::CalculateSampleGather(
 
   for(uint32_t i = 0; i < uv.columns; i++)
   {
-    if(texcoordType == 0 && (!RDCISFINITE(uv.value.fv[i])))
+    if(texcoordType == 0 && (!RDCISFINITE(uv.value.f32v[i])))
     {
       RDCWARN("NaN or Inf in texlookup");
-      uv.value.fv[i] = 0.0f;
+      uv.value.f32v[i] = 0.0f;
 
       m_pDevice->AddDebugMessage(MessageCategory::Shaders, MessageSeverity::High,
                                  MessageSource::RuntimeWarning,
@@ -1276,11 +1329,11 @@ bool D3D12DebugAPIWrapper::CalculateSampleGather(
   // because of unions in .value we can pass the float versions and printf will interpret it as
   // the right type according to formats
   if(texcoordType == 0)
-    texcoords = StringFormat::Fmt(formats[texdim + texdimOffs - 1][texcoordType], uv.value.f.x,
-                                  uv.value.f.y, uv.value.f.z, uv.value.f.w);
+    texcoords = StringFormat::Fmt(formats[texdim + texdimOffs - 1][texcoordType], uv.value.f32v[0],
+                                  uv.value.f32v[1], uv.value.f32v[2], uv.value.f32v[3]);
   else
-    texcoords = StringFormat::Fmt(formats[texdim + texdimOffs - 1][texcoordType], uv.value.i.x,
-                                  uv.value.i.y, uv.value.i.z, uv.value.i.w);
+    texcoords = StringFormat::Fmt(formats[texdim + texdimOffs - 1][texcoordType], uv.value.s32v[0],
+                                  uv.value.s32v[1], uv.value.s32v[2], uv.value.s32v[3]);
 
   rdcstr offsets = "";
 
@@ -1321,11 +1374,13 @@ bool D3D12DebugAPIWrapper::CalculateSampleGather(
 
   if(opcode == OPCODE_SAMPLE || opcode == OPCODE_SAMPLE_B || opcode == OPCODE_SAMPLE_D)
   {
-    rdcstr ddx = StringFormat::Fmt(formats[offsetDim + texdimOffs - 1][0], ddxCalc.value.f.x,
-                                   ddxCalc.value.f.y, ddxCalc.value.f.z, ddxCalc.value.f.w);
+    rdcstr ddx =
+        StringFormat::Fmt(formats[offsetDim + texdimOffs - 1][0], ddxCalc.value.f32v[0],
+                          ddxCalc.value.f32v[1], ddxCalc.value.f32v[2], ddxCalc.value.f32v[3]);
 
-    rdcstr ddy = StringFormat::Fmt(formats[offsetDim + texdimOffs - 1][0], ddyCalc.value.f.x,
-                                   ddyCalc.value.f.y, ddyCalc.value.f.z, ddyCalc.value.f.w);
+    rdcstr ddy =
+        StringFormat::Fmt(formats[offsetDim + texdimOffs - 1][0], ddyCalc.value.f32v[0],
+                          ddyCalc.value.f32v[1], ddyCalc.value.f32v[2], ddyCalc.value.f32v[3]);
 
     sampleSnippet = StringFormat::Fmt("%s : register(%s);\n%s : register(%s);\n\n",
                                       textureDecl.c_str(), strResourceBinding.c_str(),
@@ -1354,15 +1409,17 @@ bool D3D12DebugAPIWrapper::CalculateSampleGather(
     rdcstr uvswizzle = "xyzw";
     uvswizzle.resize(texdim);
 
-    rdcstr uvPlusDDX = StringFormat::Fmt(
-        formats[texdim + texdimOffs - 1][texcoordType], uv.value.f.x + ddyCalc.value.f.x * 2.0f,
-        uv.value.f.y + ddyCalc.value.f.y * 2.0f, uv.value.f.z + ddyCalc.value.f.z * 2.0f,
-        uv.value.f.w + ddyCalc.value.f.w * 2.0f);
+    rdcstr uvPlusDDX = StringFormat::Fmt(formats[texdim + texdimOffs - 1][texcoordType],
+                                         uv.value.f32v[0] + ddyCalc.value.f32v[0] * 2.0f,
+                                         uv.value.f32v[1] + ddyCalc.value.f32v[1] * 2.0f,
+                                         uv.value.f32v[2] + ddyCalc.value.f32v[2] * 2.0f,
+                                         uv.value.f32v[3] + ddyCalc.value.f32v[3] * 2.0f);
 
-    rdcstr uvPlusDDY = StringFormat::Fmt(
-        formats[texdim + texdimOffs - 1][texcoordType], uv.value.f.x + ddxCalc.value.f.x * 2.0f,
-        uv.value.f.y + ddxCalc.value.f.y * 2.0f, uv.value.f.z + ddxCalc.value.f.z * 2.0f,
-        uv.value.f.w + ddxCalc.value.f.w * 2.0f);
+    rdcstr uvPlusDDY = StringFormat::Fmt(formats[texdim + texdimOffs - 1][texcoordType],
+                                         uv.value.f32v[0] + ddxCalc.value.f32v[0] * 2.0f,
+                                         uv.value.f32v[1] + ddxCalc.value.f32v[1] * 2.0f,
+                                         uv.value.f32v[2] + ddxCalc.value.f32v[2] * 2.0f,
+                                         uv.value.f32v[3] + ddxCalc.value.f32v[3] * 2.0f);
 
     uvSnippet = "float4 uv(uint id) {\n";
     uvSnippet += "if(id == 0) return " + uvPlusDDX + ";\n";
@@ -1639,7 +1696,7 @@ bool D3D12DebugAPIWrapper::CalculateSampleGather(
                                          GetTextureDataParams(), sampleResult);
 
   ShaderVariable lookupResult("tex", 0.0f, 0.0f, 0.0f, 0.0f);
-  memcpy(lookupResult.value.iv, sampleResult.data(),
+  memcpy(lookupResult.value.u32v.data(), sampleResult.data(),
          RDCMIN(sampleResult.size(), sizeof(uint32_t) * 4));
   output = lookupResult;
 
@@ -1860,6 +1917,7 @@ ShaderDebugTrace *D3D12Replay::DebugVertex(uint32_t eventId, uint32_t vertid, ui
   }
 
   InterpretDebugger *interpreter = new InterpretDebugger;
+  interpreter->eventId = eventId;
   ShaderDebugTrace *ret = interpreter->BeginDebug(dxbc, refl, vs->GetMapping(), 0);
   GlobalState &global = interpreter->global;
   ThreadState &state = interpreter->activeLane();
@@ -1939,17 +1997,17 @@ ShaderDebugTrace *D3D12Replay::DebugVertex(uint32_t eventId, uint32_t vertid, ui
       // more data needed than is provided
       if(dxbc->GetReflection()->InputSig[i].compCount > fmt.compCount)
       {
-        state.inputs[i].value.u.w = 1;
+        state.inputs[i].value.u32v[3] = 1;
 
         if(fmt.compType == CompType::Float)
-          state.inputs[i].value.f.w = 1.0f;
+          state.inputs[i].value.f32v[3] = 1.0f;
       }
 
       // interpret resource format types
       if(fmt.Special())
       {
-        Vec3f *v3 = (Vec3f *)state.inputs[i].value.fv;
-        Vec4f *v4 = (Vec4f *)state.inputs[i].value.fv;
+        Vec3f *v3 = (Vec3f *)state.inputs[i].value.f32v.data();
+        Vec4f *v4 = (Vec4f *)state.inputs[i].value.f32v.data();
 
         // only pull in all or nothing from these,
         // if there's only e.g. 3 bytes remaining don't read and unpack some of
@@ -1961,8 +2019,8 @@ ShaderDebugTrace *D3D12Replay::DebugVertex(uint32_t eventId, uint32_t vertid, ui
 
         if(srcData == NULL || packedsize > dataSize)
         {
-          state.inputs[i].value.u.x = state.inputs[i].value.u.y = state.inputs[i].value.u.z =
-              state.inputs[i].value.u.w = 0;
+          state.inputs[i].value.u32v[0] = state.inputs[i].value.u32v[1] =
+              state.inputs[i].value.u32v[2] = state.inputs[i].value.u32v[3] = 0;
         }
         else if(fmt.type == ResourceFormatType::R5G5B5A1)
         {
@@ -1988,10 +2046,10 @@ ShaderDebugTrace *D3D12Replay::DebugVertex(uint32_t eventId, uint32_t vertid, ui
 
           if(fmt.compType == CompType::UInt)
           {
-            state.inputs[i].value.u.z = (packed >> 0) & 0x3ff;
-            state.inputs[i].value.u.y = (packed >> 10) & 0x3ff;
-            state.inputs[i].value.u.x = (packed >> 20) & 0x3ff;
-            state.inputs[i].value.u.w = (packed >> 30) & 0x003;
+            state.inputs[i].value.u32v[2] = (packed >> 0) & 0x3ff;
+            state.inputs[i].value.u32v[1] = (packed >> 10) & 0x3ff;
+            state.inputs[i].value.u32v[0] = (packed >> 20) & 0x3ff;
+            state.inputs[i].value.u32v[3] = (packed >> 30) & 0x003;
           }
           else
           {
@@ -2010,7 +2068,7 @@ ShaderDebugTrace *D3D12Replay::DebugVertex(uint32_t eventId, uint32_t vertid, ui
         {
           if(srcData == NULL || fmt.compByteWidth > dataSize)
           {
-            state.inputs[i].value.uv[c] = 0;
+            state.inputs[i].value.u32v[c] = 0;
             continue;
           }
 
@@ -2021,20 +2079,20 @@ ShaderDebugTrace *D3D12Replay::DebugVertex(uint32_t eventId, uint32_t vertid, ui
             byte *src = srcData + c * fmt.compByteWidth;
 
             if(fmt.compType == CompType::UInt)
-              state.inputs[i].value.uv[c] = *src;
+              state.inputs[i].value.u32v[c] = *src;
             else if(fmt.compType == CompType::SInt)
-              state.inputs[i].value.iv[c] = *((int8_t *)src);
+              state.inputs[i].value.s32v[c] = *((int8_t *)src);
             else if(fmt.compType == CompType::UNorm || fmt.compType == CompType::UNormSRGB)
-              state.inputs[i].value.fv[c] = float(*src) / 255.0f;
+              state.inputs[i].value.f32v[c] = float(*src) / 255.0f;
             else if(fmt.compType == CompType::SNorm)
             {
               signed char *schar = (signed char *)src;
 
               // -128 is mapped to -1, then -127 to -127 are mapped to -1 to 1
               if(*schar == -128)
-                state.inputs[i].value.fv[c] = -1.0f;
+                state.inputs[i].value.f32v[c] = -1.0f;
               else
-                state.inputs[i].value.fv[c] = float(*schar) / 127.0f;
+                state.inputs[i].value.f32v[c] = float(*schar) / 127.0f;
             }
             else
               RDCERR("Unexpected component type");
@@ -2044,22 +2102,22 @@ ShaderDebugTrace *D3D12Replay::DebugVertex(uint32_t eventId, uint32_t vertid, ui
             uint16_t *src = (uint16_t *)(srcData + c * fmt.compByteWidth);
 
             if(fmt.compType == CompType::Float)
-              state.inputs[i].value.fv[c] = ConvertFromHalf(*src);
+              state.inputs[i].value.f32v[c] = ConvertFromHalf(*src);
             else if(fmt.compType == CompType::UInt)
-              state.inputs[i].value.uv[c] = *src;
+              state.inputs[i].value.u32v[c] = *src;
             else if(fmt.compType == CompType::SInt)
-              state.inputs[i].value.iv[c] = *((int16_t *)src);
+              state.inputs[i].value.s32v[c] = *((int16_t *)src);
             else if(fmt.compType == CompType::UNorm || fmt.compType == CompType::UNormSRGB)
-              state.inputs[i].value.fv[c] = float(*src) / float(UINT16_MAX);
+              state.inputs[i].value.f32v[c] = float(*src) / float(UINT16_MAX);
             else if(fmt.compType == CompType::SNorm)
             {
               int16_t *sint = (int16_t *)src;
 
               // -32768 is mapped to -1, then -32767 to -32767 are mapped to -1 to 1
               if(*sint == -32768)
-                state.inputs[i].value.fv[c] = -1.0f;
+                state.inputs[i].value.f32v[c] = -1.0f;
               else
-                state.inputs[i].value.fv[c] = float(*sint) / 32767.0f;
+                state.inputs[i].value.f32v[c] = float(*sint) / 32767.0f;
             }
             else
               RDCERR("Unexpected component type");
@@ -2070,7 +2128,7 @@ ShaderDebugTrace *D3D12Replay::DebugVertex(uint32_t eventId, uint32_t vertid, ui
 
             if(fmt.compType == CompType::Float || fmt.compType == CompType::UInt ||
                fmt.compType == CompType::SInt)
-              memcpy(&state.inputs[i].value.uv[c], src, 4);
+              memcpy(&state.inputs[i].value.u32v[c], src, 4);
             else
               RDCERR("Unexpected component type");
           }
@@ -2079,7 +2137,7 @@ ShaderDebugTrace *D3D12Replay::DebugVertex(uint32_t eventId, uint32_t vertid, ui
         if(fmt.BGRAOrder())
         {
           RDCASSERT(fmt.compCount == 4);
-          std::swap(state.inputs[i].value.fv[2], state.inputs[i].value.fv[0]);
+          std::swap(state.inputs[i].value.f32v[2], state.inputs[i].value.f32v[0]);
         }
       }
     }
@@ -2091,20 +2149,20 @@ ShaderDebugTrace *D3D12Replay::DebugVertex(uint32_t eventId, uint32_t vertid, ui
         sv_vertid = idx - draw->baseVertex;
 
       if(dxbc->GetReflection()->InputSig[i].varType == VarType::Float)
-        state.inputs[i].value.f.x = state.inputs[i].value.f.y = state.inputs[i].value.f.z =
-            state.inputs[i].value.f.w = (float)sv_vertid;
+        state.inputs[i].value.f32v[0] = state.inputs[i].value.f32v[1] =
+            state.inputs[i].value.f32v[2] = state.inputs[i].value.f32v[3] = (float)sv_vertid;
       else
-        state.inputs[i].value.u.x = state.inputs[i].value.u.y = state.inputs[i].value.u.z =
-            state.inputs[i].value.u.w = sv_vertid;
+        state.inputs[i].value.u32v[0] = state.inputs[i].value.u32v[1] =
+            state.inputs[i].value.u32v[2] = state.inputs[i].value.u32v[3] = sv_vertid;
     }
     else if(dxbc->GetReflection()->InputSig[i].systemValue == ShaderBuiltin::InstanceIndex)
     {
       if(dxbc->GetReflection()->InputSig[i].varType == VarType::Float)
-        state.inputs[i].value.f.x = state.inputs[i].value.f.y = state.inputs[i].value.f.z =
-            state.inputs[i].value.f.w = (float)instid;
+        state.inputs[i].value.f32v[0] = state.inputs[i].value.f32v[1] =
+            state.inputs[i].value.f32v[2] = state.inputs[i].value.f32v[3] = (float)instid;
       else
-        state.inputs[i].value.u.x = state.inputs[i].value.u.y = state.inputs[i].value.u.z =
-            state.inputs[i].value.u.w = instid;
+        state.inputs[i].value.u32v[0] = state.inputs[i].value.u32v[1] =
+            state.inputs[i].value.u32v[2] = state.inputs[i].value.u32v[3] = instid;
     }
     else
     {
@@ -2801,6 +2859,7 @@ void ExtractInputsPS(PSInput IN, float4 debug_pixelPos : SV_Position,
   }
 
   InterpretDebugger *interpreter = new InterpretDebugger;
+  interpreter->eventId = eventId;
   ShaderDebugTrace *ret = interpreter->BeginDebug(dxbc, refl, origPSO->PS()->GetMapping(), destIdx);
   GlobalState &global = interpreter->global;
   ThreadState &state = interpreter->activeLane();
@@ -2816,7 +2875,7 @@ void ExtractInputsPS(PSInput IN, float4 debug_pixelPos : SV_Position,
 
     rdcarray<ShaderVariable> &ins = state.inputs;
     if(!ins.empty() && ins.back().name == "vCoverage")
-      ins.back().value.u.x = pHit->coverage;
+      ins.back().value.u32v[0] = pHit->coverage;
 
     state.semantics.coverage = pHit->coverage;
     state.semantics.primID = pHit->primitive;
@@ -2847,23 +2906,23 @@ void ExtractInputsPS(PSInput IN, float4 debug_pixelPos : SV_Position,
 
         if(initialValues[i].sysattribute == ShaderBuiltin::PrimitiveIndex)
         {
-          invar.value.u.x = pHit->primitive;
+          invar.value.u32v[0] = pHit->primitive;
         }
         else if(initialValues[i].sysattribute == ShaderBuiltin::MSAASampleIndex)
         {
-          invar.value.u.x = pHit->sample;
+          invar.value.u32v[0] = pHit->sample;
         }
         else if(initialValues[i].sysattribute == ShaderBuiltin::MSAACoverage)
         {
-          invar.value.u.x = pHit->coverage;
+          invar.value.u32v[0] = pHit->coverage;
         }
         else if(initialValues[i].sysattribute == ShaderBuiltin::IsFrontFace)
         {
-          invar.value.u.x = pHit->isFrontFace ? ~0U : 0;
+          invar.value.u32v[0] = pHit->isFrontFace ? ~0U : 0;
         }
         else
         {
-          rawout = &invar.value.iv[initialValues[i].elem];
+          rawout = &invar.value.s32v[initialValues[i].elem];
 
           memcpy(rawout, data, initialValues[i].numwords * 4);
         }
@@ -2891,7 +2950,7 @@ void ExtractInputsPS(PSInput IN, float4 debug_pixelPos : SV_Position,
       ShaderVariable var = state.inputs[key.inputRegisterIndex];
 
       // copy over the value into the variable
-      memcpy(var.value.fv, evalSampleCache, var.columns * sizeof(float));
+      memcpy(var.value.f32v.data(), evalSampleCache, var.columns * sizeof(float));
 
       // store in the global cache for each quad. We'll apply derivatives below to adjust for each
       GlobalState::SampleEvalCacheKey k = key;
@@ -2916,8 +2975,9 @@ void ExtractInputsPS(PSInput IN, float4 debug_pixelPos : SV_Position,
   return ret;
 }
 
-ShaderDebugTrace *D3D12Replay::DebugThread(uint32_t eventId, const uint32_t groupid[3],
-                                           const uint32_t threadid[3])
+ShaderDebugTrace *D3D12Replay::DebugThread(uint32_t eventId,
+                                           const rdcfixedarray<uint32_t, 3> &groupid,
+                                           const rdcfixedarray<uint32_t, 3> &threadid)
 {
   using namespace DXBCBytecode;
   using namespace DXBCDebug;
@@ -2960,6 +3020,7 @@ ShaderDebugTrace *D3D12Replay::DebugThread(uint32_t eventId, const uint32_t grou
       m_pDevice->GetResourceManager()->GetCurrentAs<WrappedID3D12PipelineState>(rs.pipe);
 
   InterpretDebugger *interpreter = new InterpretDebugger;
+  interpreter->eventId = eventId;
   ShaderDebugTrace *ret = interpreter->BeginDebug(dxbc, refl, pso->CS()->GetMapping(), 0);
   GlobalState &global = interpreter->global;
   ThreadState &state = interpreter->activeLane();
@@ -2996,27 +3057,27 @@ ShaderDebugTrace *D3D12Replay::DebugThread(uint32_t eventId, const uint32_t grou
       switch(decl.operand.type)
       {
         case TYPE_INPUT_THREAD_GROUP_ID:
-          memcpy(v.value.uv, state.semantics.GroupID, sizeof(uint32_t) * 3);
+          memcpy(v.value.u32v.data(), state.semantics.GroupID, sizeof(uint32_t) * 3);
           v.columns = 3;
           break;
         case TYPE_INPUT_THREAD_ID_IN_GROUP:
-          memcpy(v.value.uv, state.semantics.ThreadID, sizeof(uint32_t) * 3);
+          memcpy(v.value.u32v.data(), state.semantics.ThreadID, sizeof(uint32_t) * 3);
           v.columns = 3;
           break;
         case TYPE_INPUT_THREAD_ID:
-          v.value.u.x =
+          v.value.u32v[0] =
               state.semantics.GroupID[0] * dxbc->GetReflection()->DispatchThreadsDimension[0] +
               state.semantics.ThreadID[0];
-          v.value.u.y =
+          v.value.u32v[1] =
               state.semantics.GroupID[1] * dxbc->GetReflection()->DispatchThreadsDimension[1] +
               state.semantics.ThreadID[1];
-          v.value.u.z =
+          v.value.u32v[2] =
               state.semantics.GroupID[2] * dxbc->GetReflection()->DispatchThreadsDimension[2] +
               state.semantics.ThreadID[2];
           v.columns = 3;
           break;
         case TYPE_INPUT_THREAD_ID_IN_GROUP_FLATTENED:
-          v.value.u.x =
+          v.value.u32v[0] =
               state.semantics.ThreadID[2] * dxbc->GetReflection()->DispatchThreadsDimension[0] *
                   dxbc->GetReflection()->DispatchThreadsDimension[1] +
               state.semantics.ThreadID[1] * dxbc->GetReflection()->DispatchThreadsDimension[0] +
@@ -3040,7 +3101,8 @@ rdcarray<ShaderDebugState> D3D12Replay::ContinueDebug(ShaderDebugger *debugger)
   if(!interpreter)
     return NULL;
 
-  D3D12DebugAPIWrapper apiWrapper(m_pDevice, interpreter->dxbc, interpreter->global);
+  D3D12DebugAPIWrapper apiWrapper(m_pDevice, interpreter->dxbc, interpreter->global,
+                                  interpreter->eventId);
 
   D3D12MarkerRegion region(m_pDevice->GetQueue()->GetReal(), "ContinueDebug Simulation Loop");
 

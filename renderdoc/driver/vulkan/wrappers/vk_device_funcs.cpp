@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -163,6 +163,16 @@ static void StripUnwantedExtensions(rdcarray<rdcstr> &Extensions)
     // remove direct display extensions
     if(ext == "VK_KHR_display" || ext == "VK_EXT_direct_mode_display" ||
        ext == "VK_EXT_acquire_xlib_display" || ext == "VK_EXT_display_surface_counter")
+    {
+      return true;
+    }
+
+    // remove platform-specific external extensions, as we don't replay external objects. We leave
+    // the base extensions since they're widely supported and we don't strip all uses of e.g.
+    // feature structs.
+    if(ext == "VK_KHR_external_fence_fd" || ext == "VK_KHR_external_fence_win32" ||
+       ext == "VK_KHR_external_memory_fd" || ext == "VK_KHR_external_memory_win32" ||
+       ext == "VK_KHR_external_semaphore_fd" || ext == "VK_KHR_external_semaphore_win32")
     {
       return true;
     }
@@ -2346,6 +2356,7 @@ bool WrappedVulkan::Serialise_vkCreateDevice(SerialiserType &ser, VkPhysicalDevi
       {
         CHECK_PHYS_EXT_FEATURE(vulkanMemoryModel);
         CHECK_PHYS_EXT_FEATURE(vulkanMemoryModelDeviceScope);
+        CHECK_PHYS_EXT_FEATURE(vulkanMemoryModelAvailabilityVisibilityChains);
       }
       END_PHYS_EXT_CHECK();
 
@@ -2678,6 +2689,32 @@ bool WrappedVulkan::Serialise_vkCreateDevice(SerialiserType &ser, VkPhysicalDevi
         CHECK_PHYS_EXT_FEATURE(sparseImageInt64Atomics);
       }
       END_PHYS_EXT_CHECK();
+
+      BEGIN_PHYS_EXT_CHECK(
+          VkPhysicalDeviceZeroInitializeWorkgroupMemoryFeaturesKHR,
+          VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ZERO_INITIALIZE_WORKGROUP_MEMORY_FEATURES_KHR);
+      {
+        CHECK_PHYS_EXT_FEATURE(shaderZeroInitializeWorkgroupMemory);
+      }
+      END_PHYS_EXT_CHECK();
+
+      BEGIN_PHYS_EXT_CHECK(
+          VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR,
+          VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WORKGROUP_MEMORY_EXPLICIT_LAYOUT_FEATURES_KHR);
+      {
+        CHECK_PHYS_EXT_FEATURE(workgroupMemoryExplicitLayout);
+        CHECK_PHYS_EXT_FEATURE(workgroupMemoryExplicitLayoutScalarBlockLayout);
+        CHECK_PHYS_EXT_FEATURE(workgroupMemoryExplicitLayout8BitAccess);
+        CHECK_PHYS_EXT_FEATURE(workgroupMemoryExplicitLayout16BitAccess);
+      }
+      END_PHYS_EXT_CHECK();
+
+      BEGIN_PHYS_EXT_CHECK(VkPhysicalDeviceSynchronization2FeaturesKHR,
+                           VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR);
+      {
+        CHECK_PHYS_EXT_FEATURE(synchronization2);
+      }
+      END_PHYS_EXT_CHECK();
     }
 
     if(availFeatures.depthClamp)
@@ -2995,7 +3032,19 @@ bool WrappedVulkan::Serialise_vkCreateDevice(SerialiserType &ser, VkPhysicalDevi
               (VkPhysicalDeviceBufferDeviceAddressFeaturesEXT *)FindNextStruct(
                   &createInfo, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES_EXT);
 
-          if(!existingKHR && !existingEXT)
+          if(existingKHR)
+          {
+            if(existingKHR->bufferDeviceAddress)
+              existingKHR->bufferDeviceAddressCaptureReplay = VK_TRUE;
+            existingKHR->bufferDeviceAddress = VK_TRUE;
+          }
+          else if(existingEXT)
+          {
+            if(existingEXT->bufferDeviceAddress)
+              existingEXT->bufferDeviceAddressCaptureReplay = VK_TRUE;
+            existingEXT->bufferDeviceAddress = VK_TRUE;
+          }
+          else
           {
             // don't add a new VkPhysicalDeviceVulkan12Features to the pNext chain because if we do
             // we have to remove any components etc. Instead just add the individual
@@ -3508,6 +3557,15 @@ VkResult WrappedVulkan::vkCreateDevice(VkPhysicalDevice physicalDevice,
   else
     RDCWARN(
         "shaderStorageImageWriteWithoutFormat = false, multisampled textures will have empty "
+        "contents at frame start.");
+
+  // even though we don't actually do any multisampled stores, this is needed to be able to create
+  // MSAA images with STORAGE_BIT usage
+  if(availFeatures.shaderStorageImageMultisample)
+    enabledFeatures.shaderStorageImageMultisample = true;
+  else
+    RDCWARN(
+        "shaderStorageImageMultisample = false, multisampled textures will have empty "
         "contents at frame start.");
 
   // patch the enabled features

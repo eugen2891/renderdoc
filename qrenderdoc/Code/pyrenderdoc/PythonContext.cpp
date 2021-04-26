@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -136,6 +136,10 @@ PyObject *PythonContext::main_dict = NULL;
 QMap<rdcstr, PyObject *> PythonContext::extensions;
 
 static PyObject *current_global_handle = NULL;
+
+static QMutex decrefQueueMutex;
+static QList<PyObject *> decrefQueue;
+extern "C" void ProcessDecRefQueue();
 
 void FetchException(QString &typeStr, QString &valueStr, int &finalLine, QList<QString> &frames)
 {
@@ -476,8 +480,36 @@ bool PythonContext::CheckInterfaces(rdcstr &log)
   PyGILState_STATE gil = PyGILState_Ensure();
   errors |= CheckCoreInterface(log);
   errors |= CheckQtInterface(log);
+
+  for(rdcstr module_name : {"renderdoc", "qrenderdoc"})
+  {
+    PyObject *mod = PyImport_ImportModule(module_name.c_str());
+    PyObject *dict = PyModule_GetDict(mod);
+
+    PyObject *key, *value;
+    Py_ssize_t pos = 0;
+
+    while(PyDict_Next(dict, &pos, &key, &value))
+    {
+      rdcstr name = ToQStr(key);
+
+      if(name.beginsWith("__"))
+        continue;
+
+      if(!PyCallable_Check(value))
+      {
+        log += "Non-callable object found: " + module_name + "." + name +
+               ". Expected only classes and functions.\n";
+        errors = true;
+      }
+    }
+
+    Py_DECREF(mod);
+  }
+
   PyGILState_Release(gil);
 
+  log.trim();
   return errors;
 }
 
@@ -845,6 +877,8 @@ void PythonContext::executeString(const QString &filename, const QString &source
 
     PyEval_SetTrace(NULL, NULL);
 
+    ProcessDecRefQueue();
+
     Py_XDECREF(thisobj);
     Py_XDECREF(traceContext);
   }
@@ -1208,7 +1242,7 @@ PyObject *PythonContext::outstream_write(PyObject *self, PyObject *args)
 
       if(!message.empty())
         RENDERDOC_LogMessage(redirector->isStdError ? LogType::Error : LogType::Comment, "EXTN",
-                             filename.toUtf8().data(), line, message.c_str());
+                             filename, line, message);
     }
   }
 
@@ -1259,7 +1293,18 @@ extern "C" PyThreadState *GetExecutingThreadState(PyObject *global_handle)
 
 extern "C" PyObject *GetCurrentGlobalHandle()
 {
-  return current_global_handle;
+  if(current_global_handle)
+    return current_global_handle;
+
+  PyObject *sys = PyImport_ImportModule("sys");
+  if(sys)
+  {
+    PyObject *ret = PyObject_GetAttrString(sys, "stdout");
+    Py_XDECREF(sys);
+    return ret;
+  }
+
+  return NULL;
 }
 
 extern "C" void HandleException(PyObject *global_handle)
@@ -1308,7 +1353,7 @@ extern "C" void HandleException(PyObject *global_handle)
       linenum = PyFrame_GetLineNumber(frame);
     }
 
-    RENDERDOC_LogMessage(LogType::Error, "EXTN", filename.toUtf8().data(), linenum, exString.c_str());
+    RENDERDOC_LogMessage(LogType::Error, "EXTN", filename, linenum, exString);
   }
 }
 
@@ -1325,6 +1370,26 @@ extern "C" void SetThreadBlocking(PyObject *global_handle, bool block)
   OutputRedirector *redirector = (OutputRedirector *)global_handle;
   if(redirector)
     redirector->block = block;
+}
+
+extern "C" void QueueDecRef(PyObject *obj)
+{
+  QMutexLocker lock(&decrefQueueMutex);
+
+  decrefQueue.push_back(obj);
+}
+
+extern "C" void ProcessDecRefQueue()
+{
+  QMutexLocker lock(&decrefQueueMutex);
+
+  if(decrefQueue.isEmpty())
+    return;
+
+  for(PyObject *obj : decrefQueue)
+    Py_XDECREF(obj);
+
+  decrefQueue.clear();
 }
 
 extern "C" QWidget *QWidgetFromPy(PyObject *widget)

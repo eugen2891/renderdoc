@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -84,7 +84,7 @@ namespace Callstack
 void Init()
 {
   // look for our own line
-  FILE *f = FileIO::fopen("/proc/self/maps", "r");
+  FILE *f = FileIO::fopen("/proc/self/maps", FileIO::ReadText);
 
   if(f)
   {
@@ -119,24 +119,31 @@ bool GetLoadedModules(byte *buf, size_t &size)
 {
   // we just dump the whole file rather than pre-parsing, that way we can improve
   // parsing without needing to recapture
-  FILE *f = FileIO::fopen("/proc/self/maps", "r");
+  FILE *f = FileIO::fopen("/proc/self/maps", FileIO::ReadText);
 
-  size = 0;
-
-  if(buf)
-    memcpy(buf, "LNUXCALL", 8);
-
-  size += 8;
-
-  byte dummy[512];
-
-  while(!feof(f))
+  if(f == NULL)
   {
-    byte *readbuf = buf ? buf + size : dummy;
-    size += FileIO::fread(readbuf, 1, 512, f);
+    RDCWARN("Opening %s failed", "/proc/self/maps");
   }
+  else
+  {
+    size = 0;
 
-  FileIO::fclose(f);
+    if(buf)
+      memcpy(buf, "LNUXCALL", 8);
+
+    size += 8;
+
+    byte dummy[512];
+
+    while(!feof(f))
+    {
+      byte *readbuf = buf ? buf + size : dummy;
+      size += FileIO::fread(readbuf, 1, 512, f);
+    }
+
+    FileIO::fclose(f);
+  }
 
   return true;
 }

@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -409,8 +409,25 @@ struct TypeConversion<rdcdatetime, false>
 
   static PyObject *ConvertToPy(const rdcdatetime &in)
   {
-    return PyDateTime_FromDateAndTime(in.year, in.month, in.day, in.hour, in.minute, in.second,
-                                      in.microsecond);
+    rdcdatetime tmp = in;
+
+// bounds check
+#define BOUND(prop, min, max) \
+  if(tmp.prop < min)          \
+    tmp.prop = min;           \
+  if(tmp.prop > max)          \
+    tmp.prop = max;
+
+    BOUND(year, 1, 9999);
+    BOUND(month, 1, 12);
+    BOUND(day, 1, 31);
+    BOUND(hour, 0, 23);
+    BOUND(minute, 0, 59);
+    BOUND(second, 0, 59);
+    BOUND(microsecond, 0, 999999);
+
+    return PyDateTime_FromDateAndTime(tmp.year, tmp.month, tmp.day, tmp.hour, tmp.minute,
+                                      tmp.second, tmp.microsecond);
   }
 };
 
@@ -540,6 +557,18 @@ struct TypeConversion<rdcarray<U>, false>
   // nicer failure error messages out with the index that failed
   static int ConvertFromPy(PyObject *in, rdcarray<U> &out, int *failIdx)
   {
+    swig_type_info *own_type = GetTypeInfo();
+    if(own_type)
+    {
+      rdcarray<U> *ptr = NULL;
+      int ret = SWIG_ConvertPtr(in, (void **)&ptr, own_type, 0);
+      if(SWIG_IsOK(ret))
+      {
+        out = *ptr;
+        return SWIG_OK;
+      }
+    }
+
     if(!PyList_Check(in))
       return SWIG_TypeError;
 
@@ -600,6 +629,91 @@ struct TypeConversion<rdcarray<U>, false>
   }
 
   static PyObject *ConvertToPy(const rdcarray<U> &in) { return ConvertToPy(in, NULL); }
+};
+
+template <typename U, size_t N>
+struct TypeConversion<rdcfixedarray<U, N>, false>
+{
+  static swig_type_info *GetTypeInfo()
+  {
+    static swig_type_info *cached_type_info = NULL;
+    static rdcstr typeName = "rdcfixedarray < " + TypeName<U>() + "," + ToStr((uint32_t)N) + " > *";
+
+    if(cached_type_info)
+      return cached_type_info;
+
+    cached_type_info = SWIG_TypeQuery(typeName.c_str());
+
+    return cached_type_info;
+  }
+
+  // we add some extra parameters so the typemaps for array can use these to get
+  // nicer failure error messages out with the index that failed
+  static int ConvertFromPy(PyObject *in, rdcfixedarray<U, N> &out, int *failIdx)
+  {
+    if(!PySequence_Check(in))
+      return SWIG_TypeError;
+
+    Py_ssize_t size = PySequence_Size(in);
+
+    if(size != N)
+      return SWIG_TypeError;
+
+    for(size_t i = 0; i < N; i++)
+    {
+      PyObject *elem = PySequence_GetItem(in, i);
+
+      if(!elem)
+      {
+        if(failIdx)
+          *failIdx = (int)i;
+        return SWIG_TypeError;
+      }
+
+      int ret = TypeConversion<U>::ConvertFromPy(elem, out[i]);
+
+      Py_XDECREF(elem);
+
+      if(!SWIG_IsOK(ret))
+      {
+        if(failIdx)
+          *failIdx = (int)i;
+        return ret;
+      }
+    }
+
+    return SWIG_OK;
+  }
+
+  static int ConvertFromPy(PyObject *in, rdcfixedarray<U, N> &out)
+  {
+    return ConvertFromPy(in, out, NULL);
+  }
+
+  static PyObject *ConvertToPy(const rdcfixedarray<U, N> &in, int *failIdx)
+  {
+    PyObject *ret = PyTuple_New(N);
+    if(!ret)
+      return NULL;
+
+    for(size_t i = 0; i < N; i++)
+    {
+      PyObject *obj = TypeConversion<U>::ConvertToPy(in[i]);
+      if(!obj)
+      {
+        if(failIdx)
+          *failIdx = 0;
+        Py_XDECREF(ret);
+        return NULL;
+      }
+
+      PyTuple_SetItem(ret, i, obj);
+    }
+
+    return ret;
+  }
+
+  static PyObject *ConvertToPy(const rdcfixedarray<U, N> &in) { return ConvertToPy(in, NULL); }
 };
 
 // specialisation for string

@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -545,12 +545,18 @@ bool Program::UsesExtensionUAV(uint32_t slot, uint32_t space, const byte *bytes,
           tokenStream++;
         }
 
-        uint32_t opspace = ~0U;
         if(sm51)
-          opspace = tokenStream[0];
+        {
+          uint32_t opspace = tokenStream[0];
 
-        if(space == opspace && slot == opreg)
-          return true;
+          if(space == opspace && slot == opreg)
+            return true;
+        }
+        else
+        {
+          if(slot == opreg)
+            return true;
+        }
       }
     }
 

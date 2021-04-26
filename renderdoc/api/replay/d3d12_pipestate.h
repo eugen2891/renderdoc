@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -71,7 +71,10 @@ struct Layout
   DOCUMENT("The semantic index for this input.");
   uint32_t semanticIndex = 0;
 
-  DOCUMENT("The :class:`ResourceFormat` describing how the input data is interpreted.");
+  DOCUMENT(R"(The format describing how the input data is interpreted.
+
+:type: ResourceFormat
+)");
   ResourceFormat format;
 
   DOCUMENT("The vertex buffer input slot where the data is sourced from.");
@@ -154,6 +157,11 @@ struct IndexBuffer
 
   DOCUMENT("The number of bytes available in this index buffer.");
   uint32_t byteSize = 0;
+
+  DOCUMENT(R"(The number of bytes for each index in the index buffer. Typically 2 or 4 bytes but
+it can be 0 if no index buffer is bound.
+)");
+  uint32_t byteStride = 0;
 };
 
 DOCUMENT("Describes the input assembler state in the PSO.");
@@ -164,19 +172,34 @@ struct InputAssembly
   InputAssembly(const InputAssembly &) = default;
   InputAssembly &operator=(const InputAssembly &) = default;
 
-  DOCUMENT("A list of :class:`D3D12Layout` describing the input layout elements in this layout.");
+  DOCUMENT(R"(The input layout elements in this layout.
+
+:type: List[D3D12Layout]
+)");
   rdcarray<Layout> layouts;
 
-  DOCUMENT("A list of :class:`D3D12VertexBuffer` with the vertex buffers that are bound.");
+  DOCUMENT(R"(The bound vertex buffers
+
+:type: List[D3D12VertexBuffer]
+)");
   rdcarray<VertexBuffer> vertexBuffers;
 
-  DOCUMENT("The :class:`D3D12IndexBuffer` describing the index buffer.");
+  DOCUMENT(R"(The bound index buffer.
+
+:type: D3D12IndexBuffer
+)");
   IndexBuffer indexBuffer;
 
   DOCUMENT(R"(The index value to use for cutting strips. Either ``0``, ``0xffff`` or ``0xffffffff``.
 If the value is 0, strip cutting is disabled.
 )");
   uint32_t indexStripCutValue = 0;
+
+  DOCUMENT(R"(The current primitive topology.
+
+:type: Topology
+)");
+  Topology topology = Topology::Unknown;
 };
 
 // immediate indicates either a root parameter (not in a table), or static samplers
@@ -248,10 +271,16 @@ struct View
   ResourceId resourceId;
   DOCUMENT("The :class:`TextureType` of the view type.");
   TextureType type;
-  DOCUMENT("The :class:`ResourceFormat` that the view uses.");
+  DOCUMENT(R"(The format cast that the view uses.
+
+:type: ResourceFormat
+)");
   ResourceFormat viewFormat;
 
-  DOCUMENT("A :class:`TextureSwizzle4` indicating the swizzle applied to this texture.");
+  DOCUMENT(R"(The swizzle applied to a texture by the view.
+
+:type: TextureSwizzle4
+)");
   TextureSwizzle4 swizzle;
   DOCUMENT("The :class:`D3DBufferViewFlags` set for the buffer.");
   D3DBufferViewFlags bufferFlags = D3DBufferViewFlags::NoFlags;
@@ -297,11 +326,10 @@ struct Sampler
   bool operator==(const Sampler &o) const
   {
     return bind == o.bind && tableIndex == o.tableIndex && addressU == o.addressU &&
-           addressV == o.addressV && addressW == o.addressW && borderColor[0] == o.borderColor[0] &&
-           borderColor[1] == o.borderColor[1] && borderColor[2] == o.borderColor[2] &&
-           borderColor[3] == o.borderColor[3] && compareFunction == o.compareFunction &&
-           filter == o.filter && maxAnisotropy == o.maxAnisotropy && maxLOD == o.maxLOD &&
-           minLOD == o.minLOD && mipLODBias == o.mipLODBias;
+           addressV == o.addressV && addressW == o.addressW && borderColor == o.borderColor &&
+           compareFunction == o.compareFunction && filter == o.filter &&
+           maxAnisotropy == o.maxAnisotropy && maxLOD == o.maxLOD && minLOD == o.minLOD &&
+           mipLODBias == o.mipLODBias;
   }
   bool operator<(const Sampler &o) const
   {
@@ -315,14 +343,8 @@ struct Sampler
       return addressV < o.addressV;
     if(!(addressW == o.addressW))
       return addressW < o.addressW;
-    if(!(borderColor[0] == o.borderColor[0]))
-      return borderColor[0] < o.borderColor[0];
-    if(!(borderColor[1] == o.borderColor[1]))
-      return borderColor[1] < o.borderColor[1];
-    if(!(borderColor[2] == o.borderColor[2]))
-      return borderColor[2] < o.borderColor[2];
-    if(!(borderColor[3] == o.borderColor[3]))
-      return borderColor[3] < o.borderColor[3];
+    if(!(borderColor == o.borderColor))
+      return borderColor < o.borderColor;
     if(!(compareFunction == o.compareFunction))
       return compareFunction < o.compareFunction;
     if(!(filter == o.filter))
@@ -348,11 +370,17 @@ struct Sampler
   AddressMode addressV = AddressMode::Wrap;
   DOCUMENT("The :class:`AddressMode` in the W direction.");
   AddressMode addressW = AddressMode::Wrap;
-  DOCUMENT("The RGBA border color.");
-  float borderColor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+  DOCUMENT(R"(The RGBA border color.
+
+:type: Tuple[float,float,float,float]
+)");
+  rdcfixedarray<float, 4> borderColor = {0.0f, 0.0f, 0.0f, 0.0f};
   DOCUMENT("The :class:`CompareFunction` for comparison samplers.");
   CompareFunction compareFunction = CompareFunction::AlwaysTrue;
-  DOCUMENT("The :class:`TextureFilter` describing the filtering mode.");
+  DOCUMENT(R"(The filtering mode.
+
+:type: TextureFilter
+)");
   TextureFilter filter;
   DOCUMENT("The maximum anisotropic filtering level to use.");
   uint32_t maxAnisotropy = 0;
@@ -366,7 +394,7 @@ struct Sampler
   DOCUMENT(R"(Check if the border color is used in this D3D12 sampler.
 
 :return: ``True`` if the border color is used, ``False`` otherwise.
-:rtype: ``bool``
+:rtype: bool
 )");
   bool UseBorder() const
   {
@@ -417,8 +445,10 @@ struct ConstantBuffer
   DOCUMENT("How many bytes are in this constant buffer view.");
   uint32_t byteSize = 0;
 
-  DOCUMENT(R"(If :data:`immediate` is ``True`` and this is a root constant, this contains a list of
-``int`` values with the root values set.
+  DOCUMENT(R"(If :data:`immediate` is ``True`` and this is a root constant, this contains the root
+values set as interpreted as a series of DWORD values.
+
+:type: List[int]
 )");
   rdcarray<uint32_t> rootValues;
 };
@@ -466,11 +496,20 @@ struct RootSignatureRange
   ShaderStageMask visibility = ShaderStageMask::All;
   DOCUMENT("The register space of this element.");
   uint32_t registerSpace;
-  DOCUMENT("List of :class:`ConstantBuffer` containing the constant buffers.");
+  DOCUMENT(R"(The constant buffers in this range.
+
+:type: List[D3D12ConstantBuffer]
+)");
   rdcarray<ConstantBuffer> constantBuffers;
-  DOCUMENT("List of :class:`Sampler` containing the samplers.");
+  DOCUMENT(R"(The samplers in this range.
+
+:type: List[D3D12Sampler]
+)");
   rdcarray<Sampler> samplers;
-  DOCUMENT("List of :class:`View` containing the SRVs or UAVs.");
+  DOCUMENT(R"(The SRVs or UAVs in this range.
+
+:type: List[D3D12View]
+)");
   rdcarray<View> views;
 };
 
@@ -485,10 +524,14 @@ struct Shader
   DOCUMENT("The :class:`ResourceId` of the shader object itself.");
   ResourceId resourceId;
 
-  DOCUMENT("A :class:`ShaderReflection` describing the reflection data for this shader.");
+  DOCUMENT(R"(The reflection data for this shader.
+
+:type: ShaderReflection
+)");
   ShaderReflection *reflection = NULL;
-  DOCUMENT(R"(A :class:`ShaderBindpointMapping` to match :data:`reflection` with the bindpoint
-mapping data.
+  DOCUMENT(R"(The bindpoint mapping data to match :data:`reflection`.
+
+:type: ShaderBindpointMapping
 )");
   ShaderBindpointMapping bindpointMapping;
 
@@ -549,7 +592,10 @@ struct StreamOut
   StreamOut(const StreamOut &) = default;
   StreamOut &operator=(const StreamOut &) = default;
 
-  DOCUMENT("A list of ``D3D12SOBind`` with the bound buffers.");
+  DOCUMENT(R"(The bound stream-out buffer bindings.
+
+:type: List[D3D12StreamOutBind]
+)");
   rdcarray<StreamOutBind> outputs;
 };
 
@@ -591,6 +637,34 @@ not force any sample count.
   uint32_t forcedSampleCount = 0;
   DOCUMENT("The current :class:`ConservativeRaster` mode.");
   ConservativeRaster conservativeRasterization = ConservativeRaster::Disabled;
+  DOCUMENT(R"(The current base variable shading rate. This will always be 1x1 when variable shading
+is disabled.
+
+:type: Tuple[int,int]
+)");
+  rdcpair<uint32_t, uint32_t> baseShadingRate = {1, 1};
+  DOCUMENT(R"(The shading rate combiners.
+
+The combiners are applied as follows, according to the D3D spec:
+
+  ``intermediateRate = combiner[0] ( baseShadingRate,  shaderExportedShadingRate )``
+  ``finalRate        = combiner[1] ( intermediateRate, imageBasedShadingRate     )``
+
+Where the first input is from :data:`baseShadingRate` and the second is the exported shading rate
+from a vertex or geometry shader, which defaults to 1x1 if not exported.
+
+The intermediate result is then used as the first input to the second combiner, together with the
+shading rate sampled from the shading rate image.
+
+:type: Tuple[ShadingRateCombiner,ShadingRateCombiner]
+)");
+  rdcpair<ShadingRateCombiner, ShadingRateCombiner> shadingRateCombiners = {
+      ShadingRateCombiner::Passthrough, ShadingRateCombiner::Passthrough};
+  DOCUMENT(R"(The image bound as a shading rate image.
+
+:type: ResourceId
+)");
+  ResourceId shadingRateImage;
 };
 
 DOCUMENT("Describes the rasterization state of the D3D12 pipeline.");
@@ -604,13 +678,22 @@ struct Rasterizer
   DOCUMENT("The mask determining which samples are written to.");
   uint32_t sampleMask = ~0U;
 
-  DOCUMENT("A list of :class:`Viewport` with the bound viewports.");
+  DOCUMENT(R"(The bound viewports.
+
+:type: List[Viewport]
+)");
   rdcarray<Viewport> viewports;
 
-  DOCUMENT("A list of :class:`Scissor` with the bound scissor regions.");
+  DOCUMENT(R"(The bound scissor regions.
+
+:type: List[Scissor]
+)");
   rdcarray<Scissor> scissors;
 
-  DOCUMENT("A :class:`D3D12RasterizerState` with the details of the rasterization state.");
+  DOCUMENT(R"(The details of the rasterization state.
+
+:type: D3D12RasterizerState
+)");
   RasterizerState state;
 };
 
@@ -633,9 +716,16 @@ struct DepthStencilState
   DOCUMENT("``True`` if stencil operations should be performed.");
   bool stencilEnable = false;
 
-  DOCUMENT("A :class:`StencilFace` describing what happens for front-facing polygons.");
+  DOCUMENT(R"(The stencil state for front-facing polygons.
+
+:type: StencilFace
+)");
   StencilFace frontFace;
-  DOCUMENT("A :class:`StencilFace` describing what happens for back-facing polygons.");
+
+  DOCUMENT(R"(The stencil state for back-facing polygons.
+
+:type: StencilFace
+)");
   StencilFace backFace;
 
   DOCUMENT("The near plane bounding value.");
@@ -660,11 +750,17 @@ struct BlendState
 )");
   bool independentBlend = false;
 
-  DOCUMENT("A list of :class:`ColorBlend` describing the blend operations for each target.");
+  DOCUMENT(R"(The blend operations for each target.
+
+:type: List[ColorBlend]
+)");
   rdcarray<ColorBlend> blends;
 
-  DOCUMENT("The constant blend factor to use in blend equations.");
-  float blendFactor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+  DOCUMENT(R"(The constant blend factor to use in blend equations.
+
+:type: Tuple[float,float,float,float]
+)");
+  rdcfixedarray<float, 4> blendFactor = {1.0f, 1.0f, 1.0f, 1.0f};
 };
 
 DOCUMENT("Describes the current state of the output-merger stage of the D3D12 pipeline.");
@@ -675,15 +771,28 @@ struct OM
   OM(const OM &) = default;
   OM &operator=(const OM &) = default;
 
-  DOCUMENT("A :class:`D3D12DepthStencilState` with the details of the depth-stencil state.");
+  DOCUMENT(R"(The current depth-stencil state details.
+
+:type: D3D12DepthStencilState
+)");
   DepthStencilState depthStencilState;
-  DOCUMENT("A :class:`D3D12BlendState` with the details of the blend state.");
+
+  DOCUMENT(R"(The current blend state details.
+
+:type: D3D12BlendState
+)");
   BlendState blendState;
 
-  DOCUMENT("A list of :class:`D3D12View` describing the bound render targets.");
+  DOCUMENT(R"(The bound render targets.
+
+:type: List[D3D12View]
+)");
   rdcarray<View> renderTargets;
 
-  DOCUMENT("A :class:`D3D12View` with details of the bound depth-stencil target.");
+  DOCUMENT(R"(The currently bound depth-stencil target.
+
+:type: D3D12View
+)");
   View depthTarget = D3D12Pipe::View(0);
   DOCUMENT("``True`` if depth access to the depth-stencil target is read-only.");
   bool depthReadOnly = false;
@@ -738,7 +847,10 @@ struct ResourceData
   DOCUMENT("The :class:`ResourceId` of the resource.");
   ResourceId resourceId;
 
-  DOCUMENT("A list of :class:`D3D12ResourceState` entries, one for each subresource.");
+  DOCUMENT(R"(The subresource states in this resource.
+
+:type: List[D3D12ResourceState]
+)");
   rdcarray<ResourceState> states;
 };
 
@@ -757,35 +869,71 @@ struct State
   DOCUMENT("The :class:`ResourceId` of the root signature object.");
   ResourceId rootSignatureResourceId;
 
-  DOCUMENT("A list of :class:`RootSignatureRange` entries comprising the root signature.");
+  DOCUMENT(R"(The root signature, as a range per element.
+    
+:type: List[RootSignatureRange]
+)");
   rdcarray<RootSignatureRange> rootElements;
 
-  DOCUMENT("A :class:`D3D12InputAssembly` describing the input assembly pipeline stage.");
+  DOCUMENT(R"(The input assembly pipeline stage.
+
+:type: D3D12InputAssembly
+)");
   InputAssembly inputAssembly;
 
-  DOCUMENT("A :class:`D3D12Shader` describing the vertex shader stage.");
+  DOCUMENT(R"(The vertex shader stage.
+
+:type: D3D12Shader
+)");
   Shader vertexShader;
-  DOCUMENT("A :class:`D3D12Shader` describing the hull shader stage.");
+  DOCUMENT(R"(The hull shader stage.
+
+:type: D3D12Shader
+)");
   Shader hullShader;
-  DOCUMENT("A :class:`D3D12Shader` describing the domain shader stage.");
+  DOCUMENT(R"(The domain shader stage.
+
+:type: D3D12Shader
+)");
   Shader domainShader;
-  DOCUMENT("A :class:`D3D12Shader` describing the geometry shader stage.");
+  DOCUMENT(R"(The geometry shader stage.
+
+:type: D3D12Shader
+)");
   Shader geometryShader;
-  DOCUMENT("A :class:`D3D12Shader` describing the pixel shader stage.");
+  DOCUMENT(R"(The pixel shader stage.
+
+:type: D3D12Shader
+)");
   Shader pixelShader;
-  DOCUMENT("A :class:`D3D12Shader` describing the compute shader stage.");
+  DOCUMENT(R"(The compute shader stage.
+
+:type: D3D12Shader
+)");
   Shader computeShader;
 
-  DOCUMENT("A :class:`D3D12StreamOut` describing the stream-out pipeline stage.");
+  DOCUMENT(R"(The stream-out pipeline stage.
+
+:type: D3D12StreamOut
+)");
   StreamOut streamOut;
 
-  DOCUMENT("A :class:`D3D12Rasterizer` describing the rasterizer pipeline stage.");
+  DOCUMENT(R"(The rasterizer pipeline stage.
+
+:type: D3D12Rasterizer
+)");
   Rasterizer rasterizer;
 
-  DOCUMENT("A :class:`D3D12OM` describing the output merger pipeline stage.");
+  DOCUMENT(R"(The output merger pipeline stage.
+
+:type: D3D12OM
+)");
   OM outputMerger;
 
-  DOCUMENT("A list of :class:`D3D12ResourceData` entries, one for each resource.");
+  DOCUMENT(R"(The resource states for the currently live resources.
+
+:type: List[ResourceData]
+)");
   rdcarray<ResourceData> resourceStates;
 };
 

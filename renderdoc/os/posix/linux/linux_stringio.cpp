@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -622,7 +622,7 @@ void GetLibraryFilename(rdcstr &selfName)
 
   rdcstr librenderdoc_path;
 
-  FILE *f = fopen("/proc/self/maps", "r");
+  FILE *f = fopen("/proc/self/maps", FileIO::ReadText);
 
   if(f)
   {

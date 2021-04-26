@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -171,6 +171,9 @@ void VulkanRenderState::BindPipeline(WrappedVulkan *vk, VkCommandBuffer cmd,
       // state from earlier in the command buffer but there's no pipeline bound yet.
       for(size_t i = 0; i < VkDynamicCount; i++)
         dynamicStates[i] = true;
+
+      if(vk->GetDriverInfo().QualcommLineWidthDynamicStateCrash())
+        dynamicStates[VkDynamicLineWidth] = false;
     }
 
     if(!views.empty() && dynamicStates[VkDynamicViewport])

@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -576,7 +576,7 @@ public:
   char &front()
   {
     ensure_mutable();
-    return data()[0];
+    return *data();
   }
   char back() const { return *(end() - 1); }
   char &back()
@@ -1034,6 +1034,7 @@ public:
   rdcinflexiblestr(const rdcliteral &lit)
   {
     pointer = (intptr_t)lit.c_str();
+    is_literal = 0;
     is_literal |= 0x1;
   }
   rdcinflexiblestr &operator=(const rdcliteral &in)

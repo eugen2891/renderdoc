@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -1017,8 +1017,8 @@ void ReconstructVarTree(GLenum query, GLuint sepProg, GLuint varIdx, GLint numPa
       {
         if((*parentmembers)[i].name == var.name)
         {
-          ShaderVariableDescriptor &oldtype = (*parentmembers)[i].type.descriptor;
-          ShaderVariableDescriptor &newtype = var.type.descriptor;
+          ShaderConstantDescriptor &oldtype = (*parentmembers)[i].type.descriptor;
+          ShaderConstantDescriptor &newtype = var.type.descriptor;
 
           if(oldtype.rows != newtype.rows || oldtype.columns != newtype.columns ||
              oldtype.type != newtype.type || oldtype.elements != newtype.elements)
@@ -1123,7 +1123,8 @@ void MakeShaderReflection(GLenum shadType, GLuint sepProg, ShaderReflection &ref
 
   if(shadType == eGL_COMPUTE_SHADER)
   {
-    GL.glGetProgramiv(sepProg, eGL_COMPUTE_WORK_GROUP_SIZE, (GLint *)refl.dispatchThreadsDimension);
+    GL.glGetProgramiv(sepProg, eGL_COMPUTE_WORK_GROUP_SIZE,
+                      (GLint *)refl.dispatchThreadsDimension.data());
   }
   else
   {
@@ -2313,7 +2314,7 @@ void GetBindpointMapping(GLuint curProg, int shadIdx, const ShaderReflection *re
       }
 
       // handle sampler arrays, use the base name
-      rdcstr name = refl->readOnlyResources[i].name.c_str();
+      rdcstr name = refl->readOnlyResources[i].name;
       if(name.back() == ']')
       {
         do
@@ -2363,7 +2364,7 @@ void GetBindpointMapping(GLuint curProg, int shadIdx, const ShaderReflection *re
       }
 
       // handle sampler arrays, use the base name
-      rdcstr name = refl->readWriteResources[i].name.c_str();
+      rdcstr name = refl->readWriteResources[i].name;
       if(name.back() == ']')
       {
         do

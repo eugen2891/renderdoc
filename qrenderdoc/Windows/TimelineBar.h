@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -25,6 +25,7 @@
 #pragma once
 
 #include <QAbstractScrollArea>
+#include <QStylePainter>
 #include "Code/Interface/QRDInterface.h"
 
 class TimelineBar : public QAbstractScrollArea, public ITimelineBar, public ICaptureViewer
@@ -37,7 +38,7 @@ public:
 
   QSize minimumSizeHint() const override;
 
-  // IStatisticsViewer
+  // ITimelineBar
   QWidget *Widget() override { return this; }
   void HighlightResourceUsage(ResourceId id) override;
   void HighlightHistory(ResourceId id, const rdcarray<PixelModification> &history) override;
@@ -82,7 +83,7 @@ private:
   QString m_UsageTarget;
   QList<EventUsage> m_UsageEvents;
 
-  const qreal margin = 2.0;
+  const qreal margin = 3.0;
   const qreal borderWidth = 1.0;
   const QString eidAxisTitle = lit("EID:");
   const int dataBarHeight = 16;
@@ -110,6 +111,7 @@ private:
   qreal offsetOf(uint32_t eid);
   uint32_t processDraws(QVector<Marker> &markers, QVector<uint32_t> &draws,
                         const rdcarray<DrawcallDescription> &curDraws);
+  void drawLine(QStylePainter &p, QPointF start, QPointF end);
   void paintMarkers(QPainter &p, const QVector<Marker> &markers, const QVector<uint32_t> &draws,
                     QRectF markerRect);
   Marker *findMarker(QVector<Marker> &markers, QRectF markerRect, QPointF pos);

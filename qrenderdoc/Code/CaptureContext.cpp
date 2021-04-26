@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -28,6 +28,7 @@
 #include <QDirIterator>
 #include <QElapsedTimer>
 #include <QFileInfo>
+#include <QFileSystemWatcher>
 #include <QLabel>
 #include <QMenu>
 #include <QMessageBox>
@@ -97,7 +98,7 @@ CaptureContext::CaptureContext(PersistantConfig &cfg) : m_Config(cfg)
   m_MainWindow->LoadInitialLayout();
 
   {
-    QDir dir(configFilePath("extensions"));
+    QDir dir(ConfigFilePath("extensions"));
 
     if(!dir.exists())
       dir.mkpath(dir.absolutePath());
@@ -728,9 +729,22 @@ void CaptureContext::LoadCapture(const rdcstr &captureFile, const ReplayOptions 
   QElapsedTimer loadTimer;
   loadTimer.start();
 
-  ShowProgressDialog(m_MainWindow, tr("Loading Capture: %1").arg(origFilename),
+  ShowProgressDialog(m_MainWindow, tr("Loading Capture: %1").arg(QFileInfo(origFilename).fileName()),
                      [this]() { return !m_LoadInProgress; },
                      [this]() { return UpdateLoadProgress(); });
+
+  if(local)
+  {
+    m_Watcher = new QFileSystemWatcher({captureFile}, GetMainWindow()->Widget());
+
+    QObject::connect(m_Watcher, &QFileSystemWatcher::fileChanged, [this]() {
+      Replay().AsyncInvoke([this](IReplayController *r) {
+        r->FileChanged();
+        r->SetFrameEvent(m_EventID, true);
+        GUIInvoke::call(GetMainWindow()->Widget(), [this]() { RefreshUIStatus({}, true, true); });
+      });
+    });
+  }
 
 #if defined(RELEASE)
   ANALYTIC_ADDAVG(Performance.LoadTime, double(loadTimer.nsecsElapsed() * 1.0e-9));
@@ -919,6 +933,8 @@ void CaptureContext::LoadCaptureThreaded(const QString &captureFile, const Repla
 
 #elif defined(RENDERDOC_PLATFORM_APPLE)
     m_CurWinSystem = WindowingSystem::MacOS;
+#elif defined(RENDERDOC_PLATFORM_GGP)
+    m_CurWinSystem = WindowingSystem::GGP;
 #endif
 
     m_StructuredFile = &r->GetStructuredFile();
@@ -1095,7 +1111,7 @@ void CaptureContext::RecompressCapture()
   {
     // for remote files we open a new short-lived handle on the temporary file
     tempCap = cap = RENDERDOC_OpenCaptureFile();
-    cap->OpenFile(tempFilename.toUtf8().data(), "rdc", NULL);
+    cap->OpenFile(tempFilename, "rdc", NULL);
   }
 
   if(!cap)
@@ -1127,7 +1143,7 @@ void CaptureContext::RecompressCapture()
   float progress = 0.0f;
 
   LambdaThread *th = new LambdaThread([cap, destFilename, &progress]() {
-    cap->Convert(destFilename.toUtf8().data(), "rdc", NULL, [&progress](float p) { progress = p; });
+    cap->Convert(destFilename, "rdc", NULL, [&progress](float p) { progress = p; });
   });
   th->setName(lit("RecompressCapture"));
   th->start();
@@ -1155,7 +1171,7 @@ void CaptureContext::RecompressCapture()
     QFile::rename(destFilename, GetCaptureFilename());
 
     // and re-open
-    cap->OpenFile(GetCaptureFilename().c_str(), "rdc", NULL);
+    cap->OpenFile(GetCaptureFilename(), "rdc", NULL);
   }
   else
   {
@@ -1213,7 +1229,7 @@ bool CaptureContext::SaveCaptureTo(const rdcstr &captureFile)
         if(capFile)
         {
           // this will overwrite
-          success = capFile->CopyFileTo(captureFile.c_str());
+          success = capFile->CopyFileTo(captureFile);
         }
         else
         {
@@ -1272,6 +1288,9 @@ void CaptureContext::CloseCapture()
   if(!m_CaptureLoaded)
     return;
 
+  delete m_Watcher;
+  m_Watcher = NULL;
+
   delete m_RGP;
   m_RGP = NULL;
 
@@ -1281,8 +1300,8 @@ void CaptureContext::CloseCapture()
 
   m_CaptureFile = QString();
 
-  memset(&m_APIProps, 0, sizeof(m_APIProps));
-  memset(&m_FrameInfo, 0, sizeof(m_FrameInfo));
+  m_APIProps = APIProperties();
+  m_FrameInfo = FrameDescription();
   m_Buffers.clear();
   m_BufferList.clear();
   m_Textures.clear();
@@ -1341,7 +1360,7 @@ bool CaptureContext::ImportCapture(const CaptureFileFormat &fmt, const rdcstr &i
 
     ICaptureFile *file = RENDERDOC_OpenCaptureFile();
 
-    status = file->OpenFile(importfile.c_str(), ext.toUtf8().data(),
+    status = file->OpenFile(importfile, ext.toUtf8().data(),
                             [&progress](float p) { progress = p * 0.5f; });
 
     if(status != ReplayStatus::Succeeded)
@@ -1351,8 +1370,8 @@ bool CaptureContext::ImportCapture(const CaptureFileFormat &fmt, const rdcstr &i
       return;
     }
 
-    status = file->Convert(rdcfile.c_str(), "rdc", NULL,
-                           [&progress](float p) { progress = 0.5f + p * 0.5f; });
+    status =
+        file->Convert(rdcfile, "rdc", NULL, [&progress](float p) { progress = 0.5f + p * 0.5f; });
     file->Shutdown();
   });
   th->setName(lit("ImportCapture"));
@@ -1404,7 +1423,7 @@ void CaptureContext::ExportCapture(const CaptureFileFormat &fmt, const rdcstr &e
   if(!file)
   {
     local = file = RENDERDOC_OpenCaptureFile();
-    status = file->OpenFile(m_CaptureFile.toUtf8().data(), "rdc", NULL);
+    status = file->OpenFile(m_CaptureFile, "rdc", NULL);
   }
 
   QString filename = QFileInfo(m_CaptureFile).fileName();
@@ -1428,8 +1447,7 @@ void CaptureContext::ExportCapture(const CaptureFileFormat &fmt, const rdcstr &e
   float progress = 0.0f;
 
   LambdaThread *th = new LambdaThread([file, sdfile, ext, exportfile, &progress, &status]() {
-    status = file->Convert(exportfile.c_str(), ext.toUtf8().data(), sdfile,
-                           [&progress](float p) { progress = p; });
+    status = file->Convert(exportfile, ext, sdfile, [&progress](float p) { progress = p; });
   });
   th->setName(lit("ExportCapture"));
   th->start();
@@ -1478,14 +1496,35 @@ void CaptureContext::SetEventID(const rdcarray<ICaptureViewer *> &exclude, uint3
   uint32_t prevEventID = m_EventID;
   m_EventID = eventId;
 
-  m_Replay.BlockInvoke([this, eventId, force](IReplayController *r) {
+  bool done = false;
+
+  QString tag = lit("replaySetEvent");
+
+  // we can't return until the event is selected, but a blocking invoke on the UI thread can cause
+  // the UI to stall. We ideally want to have at least an interactive UI and a progress bar.
+  m_Replay.AsyncInvoke(tag, [this, eventId, force, &done](IReplayController *r) {
     r->SetFrameEvent(eventId, force);
     m_CurD3D11PipelineState = r->GetD3D11PipelineState();
     m_CurD3D12PipelineState = r->GetD3D12PipelineState();
     m_CurGLPipelineState = r->GetGLPipelineState();
     m_CurVulkanPipelineState = r->GetVulkanPipelineState();
     m_CurPipelineState = &r->GetPipelineState();
+
+    done = true;
   });
+
+  // wait a short while before displaying the progress dialog (which won't show if we're already
+  // done by the time we reach it).
+  // Keep waiting if the current tag is a set event, we don't want to be popping up progress bars
+  // when the user is browsing the frame if it's going slow. If that's the case we'll just block the
+  // UI thread. Instead only pop up the progress bar if some other large task is blocking.
+  for(int i = 0; !done && (i < 100 || m_Replay.GetCurrentProcessingTag().isEmpty() ||
+                           m_Replay.GetCurrentProcessingTag() == tag);
+      i++)
+    QThread::msleep(5);
+
+  ShowProgressDialog(m_MainWindow->Widget(), tr("Please wait, working..."),
+                     [&done]() { return done; });
 
   bool updateSelectedEvent = force || prevSelectedEventID != selectedEventID;
   bool updateEvent = force || prevEventID != eventId;
@@ -1552,9 +1591,11 @@ void CaptureContext::RefreshUIStatus(const rdcarray<ICaptureViewer *> &exclude,
       PointerTypeRegistry::CacheShader(refl);
   }
 
-  for(ICaptureViewer *viewer : m_CaptureViewers)
+  rdcarray<ICaptureViewer *> capviewers(m_CaptureViewers);
+
+  for(ICaptureViewer *viewer : capviewers)
   {
-    if(exclude.contains(viewer))
+    if(!viewer || exclude.contains(viewer) || !m_CaptureViewers.contains(viewer))
       continue;
 
     if(updateSelectedEvent)
@@ -1980,11 +2021,6 @@ void CaptureContext::SetResourceCustomName(ResourceId id, const rdcstr &name)
   RefreshUIStatus({}, true, true);
 }
 
-int CaptureContext::ResourceNameCacheID()
-{
-  return m_CustomNameCachedID;
-}
-
 #if defined(RENDERDOC_PLATFORM_APPLE)
 extern "C" void *makeNSViewMetalCompatible(void *handle);
 #endif
@@ -2032,6 +2068,11 @@ WindowingData CaptureContext::CreateWindowingData(QWidget *window)
 #elif defined(RENDERDOC_PLATFORM_APPLE)
 
   WindowingData ret = {WindowingSystem::Unknown};
+  return ret;
+
+#elif defined(RENDERDOC_PLATFORM_GGP)
+
+  WindowingData ret = {WindowingSystem::GGP};
   return ret;
 
 #else
@@ -2365,8 +2406,7 @@ void CaptureContext::ApplyShaderEdit(IShaderViewer *viewer, ResourceId id, Shade
     ResourceId from = id;
     ResourceId to;
 
-    rdctie(to, errs) =
-        r->BuildTargetShader(entryFunc.c_str(), shaderEncoding, shaderBytes, flags, stage);
+    rdctie(to, errs) = r->BuildTargetShader(entryFunc, shaderEncoding, shaderBytes, flags, stage);
 
     if(to == ResourceId())
     {
@@ -2440,7 +2480,7 @@ IConstantBufferPreviewer *CaptureContext::ViewConstantBuffer(ShaderStage stage, 
   return new ConstantBufferPreviewer(*this, stage, slot, idx, m_MainWindow);
 }
 
-IPixelHistoryView *CaptureContext::ViewPixelHistory(ResourceId texID, int x, int y,
+IPixelHistoryView *CaptureContext::ViewPixelHistory(ResourceId texID, uint32_t x, uint32_t y,
                                                     const TextureDisplay &display)
 {
   return new PixelHistoryView(*this, texID, QPoint(x, y), display, m_MainWindow);

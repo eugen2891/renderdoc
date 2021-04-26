@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -73,7 +73,7 @@ rdcstr LocatePluginFile(const rdcstr &path, const rdcstr &fileName)
   for(uint32_t i = 0; i < paths.size(); i++)
   {
     rdcstr check = paths[i] + "/" + path + "/" + fileName;
-    if(FileIO::exists(check.c_str()))
+    if(FileIO::exists(check))
     {
       ret = check;
       break;

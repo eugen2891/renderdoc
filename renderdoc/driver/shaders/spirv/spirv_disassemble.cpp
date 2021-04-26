@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -171,7 +171,7 @@ rdcstr Reflector::Disassemble(const rdcstr &entryPoint,
     // if we *still* have nothing, just stringise the id itself
     return StringFormat::Fmt("_%u", id.value());
   };
-  auto constIntVal = [this](Id id) { return EvaluateConstant(id, {}).value.u.x; };
+  auto constIntVal = [this](Id id) { return EvaluateConstant(id, {}).value.u32v[0]; };
   auto declName = [this, &idName, &usedNames, &dynamicNames](Id typeId, Id id) -> rdcstr {
     if(typeId == Id())
       return idName(id);
@@ -435,15 +435,15 @@ rdcstr Reflector::Disassemble(const rdcstr &entryPoint,
           switch(type.scalar().Type())
           {
             case VarType::Float:
-            case VarType::Half: ret += ToStr(value.f.x); break;
-            case VarType::Double: ret += ToStr(value.d.x); break;
+            case VarType::Half: ret += ToStr(value.f32v[0]); break;
+            case VarType::Double: ret += ToStr(value.f64v[0]); break;
             case VarType::SInt:
             case VarType::SShort:
-            case VarType::SByte: ret += ToStr(value.i.x); break;
-            case VarType::Bool: ret += value.u.x ? "true" : "false"; break;
+            case VarType::SByte: ret += ToStr(value.s32v[0]); break;
+            case VarType::Bool: ret += value.u32v[0] ? "true" : "false"; break;
             case VarType::UInt:
             case VarType::UShort:
-            case VarType::UByte: ret += ToStr(value.u.x); break;
+            case VarType::UByte: ret += ToStr(value.u32v[0]); break;
             case VarType::SLong: ret += ToStr(value.s64v[0]); break;
             case VarType::Unknown:
             case VarType::GPUPointer:
@@ -799,27 +799,33 @@ rdcstr Reflector::Disassemble(const rdcstr &entryPoint,
           {
             OpBranch decodedbranch(it);
 
-            ConstIter nextit = it;
-            nextit++;
-            while(nextit.opcode() == Op::Line || nextit.opcode() == Op::NoLine)
-              nextit++;
-
-            // we can now ignore everything between us and the label of this branch, which is almost
-            // always going to be the very next label.
-            //
-            // The reasoning is this:
-            // - assume the next block is not the one we are jumping to
-            // - all blocks inside the loop must only ever branch backwards to the header block
-            // (that's this one) so the block can't be jumped to from within the loop
-            // - it's also illegal to jump into a structured control flow construct from outside, so
-            //   it can't be jumped to from outside the loop
-            // - that means it is completely inaccessible from everywhere, so we can skip it
-
-            while(nextit.opcode() != Op::Label || OpLabel(nextit).result != decodedbranch.targetLabel)
+            // if the first branch after the loopmerge is to the continue target, this is an empty
+            // infinite loop. Don't try and detect the branch, just make an empty loop and exit.
+            if(decodedbranch.targetLabel != decoded.continueTarget)
             {
+              ConstIter nextit = it;
               nextit++;
-              it++;
-              instructionLines[it.offs()] = lineNum;
+              while(nextit.opcode() == Op::Line || nextit.opcode() == Op::NoLine)
+                nextit++;
+
+              // we can now ignore everything between us and the label of this branch, which is
+              // almost always going to be the very next label.
+              //
+              // The reasoning is this:
+              // - assume the next block is not the one we are jumping to
+              // - all blocks inside the loop must only ever branch backwards to the header block
+              //   (that's this one) so the block can't be jumped to from within the loop
+              // - it's also illegal to jump into a structured control flow construct from outside,
+              //   so it can't be jumped to from outside the loop
+              // - that means it is completely inaccessible from everywhere, so we can skip it
+
+              while(nextit.opcode() != Op::Label ||
+                    OpLabel(nextit).result != decodedbranch.targetLabel)
+              {
+                nextit++;
+                it++;
+                instructionLines[it.offs()] = lineNum;
+              }
             }
           }
           else
@@ -1449,7 +1455,7 @@ rdcstr Reflector::Disassemble(const rdcstr &entryPoint,
             // if it's a non-specialised constant, get its value
             if(constants.find(decoded.indexes[i]) != constants.end() &&
                specConstants.find(decoded.indexes[i]) == specConstants.end())
-              idx = EvaluateConstant(decoded.indexes[i], {}).value.i.x;
+              idx = EvaluateConstant(decoded.indexes[i], {}).value.s32v[0];
 
             // if it's a struct we must have an OpConstant to use, if it's a vector and we did get a
             // constant then do better than a basic array index syntax.
@@ -1613,20 +1619,20 @@ rdcstr Reflector::StringiseConstant(rdcspv::Id id) const
   if(type.type == DataType::ScalarType)
   {
     if(type.scalar().type == Op::TypeBool)
-      return value.value.u.x ? "true" : "false";
+      return value.value.u32v[0] ? "true" : "false";
 
     switch(value.type)
     {
       case VarType::Float:
-      case VarType::Half: return ToStr(value.value.f.x);
-      case VarType::Double: return ToStr(value.value.d.x);
+      case VarType::Half: return ToStr(value.value.f32v[0]);
+      case VarType::Double: return ToStr(value.value.f64v[0]);
       case VarType::SInt:
       case VarType::SShort:
-      case VarType::SByte: return ToStr(value.value.i.x);
-      case VarType::Bool: return value.value.u.x ? "true" : "false";
+      case VarType::SByte: return ToStr(value.value.s32v[0]);
+      case VarType::Bool: return value.value.u32v[0] ? "true" : "false";
       case VarType::UInt:
       case VarType::UShort:
-      case VarType::UByte: return ToStr(value.value.u.x);
+      case VarType::UByte: return ToStr(value.value.u32v[0]);
       case VarType::SLong: return ToStr(value.value.s64v[0]);
       case VarType::Unknown:
       case VarType::GPUPointer:
@@ -1645,16 +1651,16 @@ rdcstr Reflector::StringiseConstant(rdcspv::Id id) const
       switch(value.type)
       {
         case VarType::Float:
-        case VarType::Half: ret += ToStr(value.value.fv[i]); break;
-        case VarType::Double: ret += ToStr(value.value.dv[i]); break;
+        case VarType::Half: ret += ToStr(value.value.f32v[i]); break;
+        case VarType::Double: ret += ToStr(value.value.f64v[i]); break;
         case VarType::SInt:
         case VarType::SShort:
-        case VarType::SByte: ret += ToStr(value.value.iv[i]); break;
+        case VarType::SByte: ret += ToStr(value.value.s32v[i]); break;
         case VarType::UInt:
         case VarType::UShort:
-        case VarType::UByte: ret += ToStr(value.value.uv[i]); break;
+        case VarType::UByte: ret += ToStr(value.value.u32v[i]); break;
         case VarType::SLong: ret += ToStr(value.value.s64v[i]); break;
-        case VarType::Bool: return value.value.u.x ? "true" : "false";
+        case VarType::Bool: return value.value.u32v[0] ? "true" : "false";
         case VarType::Unknown:
         case VarType::GPUPointer:
         case VarType::ConstantBlock:

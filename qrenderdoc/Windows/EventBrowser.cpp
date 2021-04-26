@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -113,6 +113,8 @@ EventBrowser::EventBrowser(ICaptureContext &ctx, QWidget *parent)
 
   ui->events->setItemVerticalMargin(0);
   ui->events->setIgnoreIconSize(true);
+
+  ui->events->setColoredTreeLineWidth(3.0f);
 
   // set up default section layout. This will be overridden in restoreState()
   ui->events->header()->resizeSection(COL_EID, 80);
@@ -238,6 +240,8 @@ EventBrowser::~EventBrowser()
 
 void EventBrowser::OnCaptureLoaded()
 {
+  ui->events->setIgnoreBackgroundColors(!m_Ctx.Config().EventBrowser_ColorEventRow);
+
   uint32_t frameNumber = m_Ctx.FrameInfo().frameNumber;
 
   QString rootName =
@@ -359,7 +363,7 @@ QPair<uint32_t, uint32_t> EventBrowser::AddDrawcalls(RDTreeWidgetItem *parent,
 
     QVariant name = QString(d.name);
 
-    RichResourceTextInitialise(name);
+    RichResourceTextInitialise(name, &m_Ctx);
 
     RDTreeWidgetItem *child = new RDTreeWidgetItem(
         {name, QString::number(d.eventId), QString::number(d.drawcallId), lit("---")});
@@ -388,12 +392,12 @@ QPair<uint32_t, uint32_t> EventBrowser::AddDrawcalls(RDTreeWidgetItem *parent,
     if(m_Ctx.Config().EventBrowser_ApplyColors)
     {
       // if alpha isn't 0, assume the colour is valid
-      if((d.flags & (DrawFlags::PushMarker | DrawFlags::SetMarker)) && d.markerColor[3] > 0.0f)
+      if((d.flags & (DrawFlags::PushMarker | DrawFlags::SetMarker)) && d.markerColor.w > 0.0f)
       {
         QColor col = QColor::fromRgb(
-            qRgb(d.markerColor[0] * 255.0f, d.markerColor[1] * 255.0f, d.markerColor[2] * 255.0f));
+            qRgb(d.markerColor.x * 255.0f, d.markerColor.y * 255.0f, d.markerColor.z * 255.0f));
 
-        child->setTreeColor(col, 3.0f);
+        child->setTreeColor(col);
 
         if(m_Ctx.Config().EventBrowser_ColorEventRow)
         {
@@ -945,16 +949,19 @@ void EventBrowser::events_contextMenu(const QPoint &pos)
 
   QAction expandAll(tr("&Expand All"), this);
   QAction collapseAll(tr("&Collapse All"), this);
+  QAction toggleBookmark(tr("Toggle &Bookmark"), this);
   QAction selectCols(tr("&Select Columns..."), this);
   QAction rgpSelect(tr("Select &RGP Event"), this);
   rgpSelect.setIcon(Icons::connect());
 
   contextMenu.addAction(&expandAll);
   contextMenu.addAction(&collapseAll);
+  contextMenu.addAction(&toggleBookmark);
   contextMenu.addAction(&selectCols);
 
   expandAll.setIcon(Icons::arrow_out());
   collapseAll.setIcon(Icons::arrow_in());
+  toggleBookmark.setIcon(Icons::asterisk_orange());
   selectCols.setIcon(Icons::timeline_marker());
 
   expandAll.setEnabled(item && item->childCount() > 0);
@@ -965,6 +972,8 @@ void EventBrowser::events_contextMenu(const QPoint &pos)
 
   QObject::connect(&collapseAll, &QAction::triggered,
                    [this, item]() { ui->events->collapseAllItems(item); });
+
+  QObject::connect(&toggleBookmark, &QAction::triggered, this, &EventBrowser::on_bookmark_clicked);
 
   QObject::connect(&selectCols, &QAction::triggered, this, &EventBrowser::on_colSelect_clicked);
 

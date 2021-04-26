@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -333,10 +333,33 @@ basic UI building tools for simple data input and display which can be used on a
   :param CaptureContext context: The current capture context.
   :param QWidget widget: The widget sending the callback.
   :param str text: Additional data for the call, such as the current or selected text.
+
+.. function:: InvokeCallback(context, widget, text)
+
+  Not a member function - the signature for any ``InvokeCallback`` callbacks.
+
+  Callback for invoking onto the UI thread from another thread (in particular the replay thread).
+  Takes no parameters as the callback is expected to store its own state.
 )");
 struct IMiniQtHelper
 {
   typedef std::function<void(ICaptureContext *, QWidget *, rdcstr)> WidgetCallback;
+  typedef std::function<void()> InvokeCallback;
+
+  DOCUMENT(R"(Invoke a callback on the UI thread. All widget accesses must come from the UI thread,
+so if work has been done on the render thread then this function can be used to asynchronously and
+safely go back to the UI thread.
+
+This function is safe to call on the UI thread, but it will synchronously call the callback
+immediately before returning.
+
+.. note::
+  No parameters are provided to the callback, it is assumed that the callback will maintain its own
+  context as needed.
+
+:param InvokeCallback callback: The callback to invoke on the UI thread.
+)");
+  virtual void InvokeOntoUIThread(InvokeCallback callback) = 0;
 
   // top level widgets
 
@@ -350,10 +373,22 @@ is a layout type widget, to allow customising how children are added. By default
 added in a vertical layout.
 
 :param str windowTitle: The title of any window with this widget as its root.
+:param WidgetCallback closed: A callback that will be called when the widget is closed by the user.
+  This implicitly deletes the widget and all its children, which will no longer be valid even if a
+  handle to them exists.
 :return: The handle to the newly created widget.
-:rtype: ``QWidget``
+:rtype: QWidget
 )");
-  virtual QWidget *CreateToplevelWidget(const rdcstr &windowTitle) = 0;
+  virtual QWidget *CreateToplevelWidget(const rdcstr &windowTitle, WidgetCallback closed) = 0;
+
+  DOCUMENT(R"(Closes a top-level widget as if the user had clicked to close.
+
+This function is undefined if used on a non top-level widget. It will invoke the closed widget
+callback.
+
+:param QWidget widget: The top-level widget to close.
+)");
+  virtual void CloseToplevelWidget(QWidget *widget) = 0;
 
   // widget hierarchy
 
@@ -388,10 +423,10 @@ should only be used for debugging as the name may change even if for the same ty
 
   DOCUMENT(R"(Find a child widget of a parent by internal name.
 
-:param QWidget widget: The widget to start the search from.
+:param QWidget parent: The widget to start the search from.
 :param str name: The internal name to search for.
 :return: The handle to the first widget with a matching name, or ``None`` if no widget is found.
-:rtype: ``QWidget``
+:rtype: QWidget
 )");
   virtual QWidget *FindChildByName(QWidget *parent, const rdcstr &name) = 0;
 
@@ -405,7 +440,7 @@ should only be used for debugging as the name may change even if for the same ty
 :param QWidget widget: The widget to query.
 :return: The handle to the parent widget with a matching name, or ``None`` if this widget is either
   not yet parented or is a top-level window.
-:rtype: ``QWidget``
+:rtype: QWidget
 )");
   virtual QWidget *GetParent(QWidget *widget) = 0;
 
@@ -416,16 +451,32 @@ layout type widgets.
 :return: The number of child widgets this widget has.
 :rtype: int
 )");
-  virtual int GetNumChildren(QWidget *widget) = 0;
+  virtual int32_t GetNumChildren(QWidget *widget) = 0;
 
   DOCUMENT(R"(Return a child widget for a parent.
 
 :param QWidget parent: The parent widget to look up.
 :param int index: The child index to return.
 :return: The specified child of the parent, or ``None`` if the index is out of bounds.
-:rtype: ``QWidget``
+:rtype: QWidget
 )");
-  virtual QWidget *GetChild(QWidget *parent, int index) = 0;
+  virtual QWidget *GetChild(QWidget *parent, int32_t index) = 0;
+
+  DOCUMENT(R"(Destroy a widget. Widgets stay alive unless explicitly destroyed here, OR in one other
+case when they are in a widget hiearchy under a top-level window which the user closes, which can
+be detected with the callback parameter in :meth:`CreateToplevelWidget`.
+
+If the widget being destroyed is a top-level window, it will be closed. Otherwise if it is part of a
+widget hierarchy it will be removed from its parent automatically. You can remove a widget and then
+destroy it if you wish, but you must not destroy a widget then attempt to remove it from its parent,
+as after the call to this function the widget is no longer valid to use.
+
+All children under this widget will be destroyed recursively as well, which will be made invalid
+even if a handle to them exists.
+
+:param QWidget widget: The widget to destroy.
+)");
+  virtual void DestroyWidget(QWidget *widget) = 0;
 
   // dialogs
 
@@ -464,7 +515,7 @@ which typically has some widgets be only large enough for their content and othe
 'greedy' evenly divide any remaining free space.
 
 :return: The handle to the newly created widget.
-:rtype: ``QWidget``
+:rtype: QWidget
 )");
   virtual QWidget *CreateHorizontalContainer() = 0;
 
@@ -477,7 +528,7 @@ which typically has some widgets be only large enough for their content and othe
 'greedy' evenly divide any remaining free space.
 
 :return: The handle to the newly created widget.
-:rtype: ``QWidget``
+:rtype: QWidget
 )");
   virtual QWidget *CreateVerticalContainer() = 0;
 
@@ -490,9 +541,22 @@ which typically has some widgets be only large enough for their content and othe
 'greedy' evenly divide any remaining free space. This will not violate the grid constraint though.
 
 :return: The handle to the newly created widget.
-:rtype: ``QWidget``
+:rtype: QWidget
 )");
   virtual QWidget *CreateGridContainer() = 0;
+
+  DOCUMENT(R"(Creates and returns a spacer widget.
+
+This widget is completely empty but consumes empty space, meaning all other non-greedy widgets in
+the same container will be minimally sized. This can be useful for simple layouts.
+
+:param bool horizontal: ``True`` if this spacer should consume horizontal space, ``False`` if this
+  spacer should consume vertical space. Typically this matches the direction of the layout it is
+  in.
+:return: The handle to the newly created widget.
+:rtype: QWidget
+)");
+  virtual QWidget *CreateSpacer(bool horizontal) = 0;
 
   DOCUMENT(R"(Removes all child widgets from a parent and makes them invisible.
 
@@ -512,8 +576,8 @@ happen and the widget will not be added anywhere.
 :param int rowSpan: How many rows should this child span over.
 :param int columnSpan: How many columns should this child span over.
 )");
-  virtual void AddGridWidget(QWidget *parent, int row, int column, QWidget *child, int rowSpan,
-                             int columnSpan) = 0;
+  virtual void AddGridWidget(QWidget *parent, int32_t row, int32_t column, QWidget *child,
+                             int32_t rowSpan, int32_t columnSpan) = 0;
 
   DOCUMENT(R"(Adds a child widget to the end of an ordered layout (either horizontal or vertical).
 If the parent is not an ordered layout nothing will happen and the widget will not be added anywhere.
@@ -533,7 +597,7 @@ added anywhere.
   of children will append the widget
 :param QWidget child: The child widget to add.
 )");
-  virtual void InsertWidget(QWidget *parent, int index, QWidget *child) = 0;
+  virtual void InsertWidget(QWidget *parent, int32_t index, QWidget *child) = 0;
 
   // widget manipulation
 
@@ -562,7 +626,7 @@ add text next to it.
 :param bool bold: ``True`` if the font should be bold.
 :param bool italic: ``True`` if the font should be italic.
 )");
-  virtual void SetWidgetFont(QWidget *widget, const rdcstr &font, int fontSize, bool bold,
+  virtual void SetWidgetFont(QWidget *widget, const rdcstr &font, int32_t fontSize, bool bold,
                              bool italic) = 0;
 
   DOCUMENT(R"(Set whether the widget is enabled or not. This generally only affects interactive
@@ -585,6 +649,25 @@ data.
 )");
   virtual bool IsWidgetEnabled(QWidget *widget) = 0;
 
+  DOCUMENT(R"(Set whether the widget is visible or not. An invisible widget maintains its position
+in the hierarchy but is not visible and cannot be interacted with in any way.
+
+:param QWidget widget: The widget to show or hide.
+:param bool visible: ``True`` if the widget should be made visible (shown).
+)");
+  virtual void SetWidgetVisible(QWidget *widget, bool visible) = 0;
+
+  DOCUMENT(R"(Return the current visibility of a widget. See :meth:`SetWidgetVisible`.
+
+This query is recursive - a widget could be individually visible, but if it is under a parent which
+is invisible then this widget will be returned as invisible.
+
+:param QWidget widget: The widget to query.
+:return: ``True`` if the widget is currently visible.
+:rtype: bool
+)");
+  virtual bool IsWidgetVisible(QWidget *widget) = 0;
+
   // specific widgets
 
   DOCUMENT(R"(Create a groupbox widget which can optionally allow collapsing.
@@ -598,7 +681,7 @@ The widget needs to be added to a parent to become part of a panel or window.
 :param bool collapsible: ``True`` if the groupbox should have a toggle in its header to allow
   collapsing its contents down vertically.
 :return: The handle to the newly created widget.
-:rtype: ``QWidget``
+:rtype: QWidget
 )");
   virtual QWidget *CreateGroupBox(bool collapsible) = 0;
 
@@ -606,7 +689,7 @@ The widget needs to be added to a parent to become part of a panel or window.
 
 :param WidgetCallback pressed: Callback to be called when the button is pressed.
 :return: The handle to the newly created widget.
-:rtype: ``QWidget``
+:rtype: QWidget
 )");
   virtual QWidget *CreateButton(WidgetCallback pressed) = 0;
 
@@ -616,9 +699,25 @@ The widget needs to be added to a parent to become part of a panel or window.
   This widget will be blank by default, you can set the text with :meth:`SetWidgetText`.
 
 :return: The handle to the newly created widget.
-:rtype: ``QWidget``
+:rtype: QWidget
 )");
   virtual QWidget *CreateLabel() = 0;
+
+  DOCUMENT(R"(Set an image for a label widget. If the widget isn't a label, this call has no effect.
+
+The label will be resized to a fixed size to display the image at 100% scale. Any text in the label
+will not be displayed, but passing an empty image will revert the label back to being text-based.
+
+The data must be in RGB(A) format with the first byte of each texel being R.
+
+:param QWidget widget: The widget to set the picture for.
+:param bytes data: The image data itself, tightly packed.
+:param int width: The width of the image in pixels.
+:param int height: The height of the image in pixels.
+:param bool alpha: ``True`` if the image data contains an alpha channel.
+)");
+  virtual void SetLabelImage(QWidget *widget, const bytebuf &data, int32_t width, int32_t height,
+                             bool alpha) = 0;
 
   DOCUMENT(R"(Create a widget suitable for rendering to with a :class:`renderdoc.ReplayOutput`. This
 widget takes care of painting on demand and recreating the internal display widget when necessary,
@@ -627,7 +726,7 @@ creating the output as well as call :meth:`SetWidgetReplayOutput` to notify the 
 current output.
 
 :return: The handle to the newly created widget.
-:rtype: ``QWidget``
+:rtype: QWidget
 )");
   virtual QWidget *CreateOutputRenderingWidget() = 0;
 
@@ -645,9 +744,9 @@ cause the widget to go into an undefined state unless an output is created to re
 .. note::
   This function must be called on the main UI thread.
 
-:param QWidget window: The widget to create windowing data for.
+:param QWidget widget: The widget to create windowing data for.
 :return: The windowing data.
-:rtype: ~renderdoc.WindowingData
+:rtype: renderdoc.WindowingData
 )");
   virtual WindowingData GetWidgetWindowingData(QWidget *widget) = 0;
 
@@ -661,7 +760,7 @@ When a capture is closed and all outputs are destroyed, the widget will automati
 output so there is no need to do that manually.
 
 :param QWidget widget: The widget to set the output for.
-:param ~renderdoc.ReplayOutput output: The new output to set, or ``None`` to unset any previous
+:param renderdoc.ReplayOutput output: The new output to set, or ``None`` to unset any previous
   output.
 )");
   virtual void SetWidgetReplayOutput(QWidget *widget, IReplayOutput *output) = 0;
@@ -686,7 +785,7 @@ created the checkbox is unchecked.
 
 :param WidgetCallback changed: Callback to be called when the widget is toggled.
 :return: The handle to the newly created widget.
-:rtype: ``QWidget``
+:rtype: QWidget
 )");
   virtual QWidget *CreateCheckbox(WidgetCallback changed) = 0;
 
@@ -698,7 +797,7 @@ If you want a default radio box to be checked, you should use :meth:`SetWidgetCh
 
 :param WidgetCallback changed: Callback to be called when the widget is toggled.
 :return: The handle to the newly created widget.
-:rtype: ``QWidget``
+:rtype: QWidget
 )");
   virtual QWidget *CreateRadiobox(WidgetCallback changed) = 0;
 
@@ -730,9 +829,9 @@ By default the spinbox has minimum and maximum values of 0.0 and 100.0, these ca
 :param int decimalPlaces: The number of decimal places to display when showing the number.
 :param float step: The step value to apply in each direction when clicking up or down.
 :return: The handle to the newly created widget.
-:rtype: ``QWidget``
+:rtype: QWidget
 )");
-  virtual QWidget *CreateSpinbox(int decimalPlaces, double step) = 0;
+  virtual QWidget *CreateSpinbox(int32_t decimalPlaces, double step) = 0;
 
   DOCUMENT(R"(Set the minimum and maximum values allowed in the spinbox. If another type of widget
 is passed nothing will happen.
@@ -768,7 +867,7 @@ happen.
   multi-line text box.
 :param WidgetCallback changed: Callback to be called when the text in the textbox is changed.
 :return: The handle to the newly created widget.
-:rtype: ``QWidget``
+:rtype: QWidget
 )");
   virtual QWidget *CreateTextBox(bool singleLine, WidgetCallback changed) = 0;
 
@@ -782,7 +881,7 @@ When created there are no pre-defined entries in the drop-down section. This can
 :param WidgetCallback changed: Callback to be called when the text in the combobox is changed. This
   will be called both when a new option is selected or when the user edits the text.
 :return: The handle to the newly created widget.
-:rtype: ``QWidget``
+:rtype: QWidget
 )");
   virtual QWidget *CreateComboBox(bool editable, WidgetCallback changed) = 0;
 
@@ -790,7 +889,7 @@ When created there are no pre-defined entries in the drop-down section. This can
 passed nothing will happen.
 
 :param QWidget combo: The combo box.
-:param ``list`` of ``str`` options: The new options for the combo box.
+:param List[str] options: The new options for the combo box.
 )");
   virtual void SetComboOptions(QWidget *combo, const rdcarray<rdcstr> &options) = 0;
 
@@ -827,7 +926,7 @@ struct IExtensionManager
   DOCUMENT(R"(Retrieve a list of installed extensions.
 
 :return: The list of installed extensions.
-:rtype: ``list`` of :class:`ExtensionMetadata`.
+:rtype: List[ExtensionMetadata]
 )");
   virtual rdcarray<ExtensionMetadata> GetInstalledExtensions() = 0;
 
@@ -858,11 +957,10 @@ struct IExtensionManager
   with a child may not receive callbacks at the correct times.
 
 :param WindowMenu base: The base menu to add the item to.
-:param list submenus: A list of strings containing the submenus to add before the item. The last
-  string will be the name of the menu item itself. Must contain at least one entry, or two entries
-  if ``base`` is :data:`WindowMenu.NewMenu`.
-:param callback: The function to callback when the menu item is selected.
-:type method: :func:`ExtensionCallback`
+:param List[str] submenus: A list of strings containing the submenus to add before the item. The
+  last string will be the name of the menu item itself. Must contain at least one entry, or two
+  entries if ``base`` is :data:`WindowMenu.NewMenu`.
+:param ExtensionCallback callback: The function to callback when the menu item is selected.
 )");
   virtual void RegisterWindowMenu(WindowMenu base, const rdcarray<rdcstr> &submenus,
                                   ExtensionCallback callback) = 0;
@@ -875,10 +973,9 @@ struct IExtensionManager
   with a child may not receive callbacks at the correct times.
 
 :param PanelMenu base: The panel to add the item to.
-:param list submenus: A list of strings containing the submenus to add before the item. The last
-  string will be the name of the menu item itself. Must contain at least one entry.
-:param callback: The function to callback when the menu item is selected.
-:type method: :func:`ExtensionCallback`
+:param List[str] submenus: A list of strings containing the submenus to add before the item. The
+  last string will be the name of the menu item itself. Must contain at least one entry.
+:param ExtensionCallback callback: The function to callback when the menu item is selected.
 )");
   virtual void RegisterPanelMenu(PanelMenu base, const rdcarray<rdcstr> &submenus,
                                  ExtensionCallback callback) = 0;
@@ -891,10 +988,9 @@ struct IExtensionManager
   with a child may not receive callbacks at the correct times.
 
 :param ContextMenu base: The panel to add the item to.
-:param list submenus: A list of strings containing the submenus to add before the item. The last
-  string will be the name of the menu item itself. Must contain at least one entry.
-:param callback: The function to callback when the menu item is selected.
-:type method: :func:`ExtensionCallback`
+:param List[str] submenus: A list of strings containing the submenus to add before the item. The
+  last string will be the name of the menu item itself. Must contain at least one entry.
+:param ExtensionCallback callback: The function to callback when the menu item is selected.
 )");
   virtual void RegisterContextMenu(ContextMenu base, const rdcarray<rdcstr> &submenus,
                                    ExtensionCallback callback) = 0;
@@ -927,7 +1023,7 @@ struct IExtensionManager
   DOCUMENT(R"(Display an error message dialog.
 
 :param str text: The text of the dialog itself, required.
-:param list options: The buttons to display on the dialog.
+:param List[DialogButton] options: The buttons to display on the dialog.
 :param str title: The dialog title, optional.
 :return: The button that was clicked on.
 :rtype: DialogButton

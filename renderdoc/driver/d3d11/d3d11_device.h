@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -162,6 +162,20 @@ public:
   virtual BOOL STDMETHODCALLTYPE SetReal(IUnknown *);
   virtual IUnknown *STDMETHODCALLTYPE GetReal();
   virtual BOOL STDMETHODCALLTYPE SetShaderExtUAV(DWORD space, DWORD reg, BOOL global);
+  virtual void STDMETHODCALLTYPE UnwrapDesc(D3D12_GRAPHICS_PIPELINE_STATE_DESC *pDesc) {}
+  virtual void STDMETHODCALLTYPE UnwrapDesc(D3D12_COMPUTE_PIPELINE_STATE_DESC *pDesc) {}
+  virtual ID3D12PipelineState *STDMETHODCALLTYPE
+  ProcessCreatedGraphicsPipelineState(const D3D12_GRAPHICS_PIPELINE_STATE_DESC *pDesc, uint32_t reg,
+                                      uint32_t space, ID3D12PipelineState *realPSO)
+  {
+    return NULL;
+  }
+  virtual ID3D12PipelineState *STDMETHODCALLTYPE
+  ProcessCreatedComputePipelineState(const D3D12_COMPUTE_PIPELINE_STATE_DESC *pDesc, uint32_t reg,
+                                     uint32_t space, ID3D12PipelineState *realPSO)
+  {
+    return NULL;
+  }
 };
 
 struct WrappedAGS11 : public IAGSD3DDevice
@@ -764,6 +778,7 @@ public:
   ResourceId GetBackbufferResourceID() { return m_BBID; }
   void ReportDeath(ID3D11DeviceChild *obj);
   void FlushPendingDead();
+  void Resurrect(ID3D11DeviceChild *obj);
 
   ////////////////////////////////////////////////////////////////
   // Functions for D3D9 hooks to call into (D3DPERF api)

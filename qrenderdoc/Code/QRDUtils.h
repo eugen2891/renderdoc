@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -58,14 +58,11 @@ inline QString ToQStr(const T &el)
   return QString(ToStr(el));
 }
 
-// overload for a couple of things that need to know the pipeline type when converting
+// overloads for a couple of things that need to know the pipeline type when converting
 QString ToQStr(const ResourceUsage usage, const GraphicsAPI apitype);
-
-// overload for a couple of things that need to know the pipeline type when converting
 QString ToQStr(const ShaderStage stage, const GraphicsAPI apitype);
-
-// overload for a couple of things that need to know the pipeline type when converting
 QString ToQStr(const AddressMode addr, const GraphicsAPI apitype);
+QString ToQStr(const ShadingRateCombiner addr, const GraphicsAPI apitype);
 
 inline QMetaType::Type GetVariantMetatype(const QVariant &v)
 {
@@ -101,10 +98,13 @@ public:
 
   static QString DeclareStruct(const QString &name, const rdcarray<ShaderConstant> &members,
                                uint32_t requiredByteStride);
+
+  static uint32_t GetStructVarSize(const rdcarray<ShaderConstant> &members);
+
   static QString DeclarePaddingBytes(uint32_t bytes);
 };
 
-QVariantList GetVariants(ResourceFormat format, const ShaderVariableDescriptor &varDesc,
+QVariantList GetVariants(ResourceFormat format, const ShaderConstantDescriptor &varDesc,
                          const byte *&data, const byte *end);
 ResourceFormat GetInterpretedResourceFormat(const ShaderConstant &elem);
 void SetInterpretedResourceFormat(ShaderConstant &elem, ResourceFormatType interpretType,
@@ -137,23 +137,23 @@ public:
 
   static uint32_t GetTypeID(ResourceId shader, uint32_t pointerTypeId);
   static uint32_t GetTypeID(PointerVal val) { return GetTypeID(val.shader, val.pointerTypeID); }
-  static uint32_t GetTypeID(const ShaderVariableType &structDef);
+  static uint32_t GetTypeID(const ShaderConstantType &structDef);
 
-  static const ShaderVariableType &GetTypeDescriptor(uint32_t typeId);
-  static const ShaderVariableType &GetTypeDescriptor(ResourceId shader, uint32_t pointerTypeId)
+  static const ShaderConstantType &GetTypeDescriptor(uint32_t typeId);
+  static const ShaderConstantType &GetTypeDescriptor(ResourceId shader, uint32_t pointerTypeId)
   {
     return GetTypeDescriptor(GetTypeID(shader, pointerTypeId));
   }
-  static const ShaderVariableType &GetTypeDescriptor(PointerVal val)
+  static const ShaderConstantType &GetTypeDescriptor(PointerVal val)
   {
     return GetTypeDescriptor(GetTypeID(val));
   }
 
 private:
-  static void CacheSubTypes(const ShaderReflection *reflection, ShaderVariableType &structDef);
+  static void CacheSubTypes(const ShaderReflection *reflection, ShaderConstantType &structDef);
 
   static QMap<QPair<ResourceId, uint32_t>, uint32_t> typeMapping;
-  static rdcarray<ShaderVariableType> typeDescriptions;
+  static rdcarray<ShaderConstantType> typeDescriptions;
 };
 
 struct GPUAddress
@@ -172,6 +172,8 @@ struct GPUAddress
   void cacheAddress(const QWidget *widget);
 };
 
+ICaptureContext *getCaptureContext(const QWidget *widget);
+
 // this will check the variant, and if it contains a ResourceId directly or text with ResourceId
 // identifiers then it will be converted into a RichResourceTextPtr or ResourceId in-place. The new
 // QVariant will still convert to QString so it doesn't have to be special-cased. However it must be
@@ -187,7 +189,7 @@ struct GPUAddress
 // NOTE: It is not possible to move a RichResourceText instance from one ICaptureContext to another
 // as the pointer is cached internally. Instead you should delete the old and re-initialise from
 // scratch.
-void RichResourceTextInitialise(QVariant &var);
+void RichResourceTextInitialise(QVariant &var, ICaptureContext *ctx = NULL);
 
 // Checks if a variant is rich resource text and should be treated specially
 // Particularly meaning we need mouse tracking on the widget to handle the on-hover highlighting
@@ -199,9 +201,10 @@ void RichResourceTextPaint(const QWidget *owner, QPainter *painter, QRect rect, 
                            QPalette palette, QStyle::State state, QPoint mousePos,
                            const QVariant &var);
 
-// Gives the width for a size hint for the rich text (since it might be larger than the original
-// text)
+// Gives the width/height for a size hint for the rich text (since it might be larger than the
+// original text)
 int RichResourceTextWidthHint(const QWidget *owner, const QFont &font, const QVariant &var);
+int RichResourceTextHeightHint(const QWidget *owner, const QFont &font, const QVariant &var);
 
 // Handle a mouse event on some rich resource text.
 // Returns true if the event is processed - for mouse move events, this means that the mouse is over
@@ -253,13 +256,14 @@ struct Formatter
   static QString Format(int32_t i, bool hex = false) { return QString::number(i); }
   static QString Format(int64_t i, bool hex = false) { return QString::number(i); }
   static const QFont &PreferredFont() { return *m_Font; }
+  static const QFont &FixedFont() { return *m_FixedFont; }
   static const QColor DarkCheckerColor() { return m_DarkChecker; }
   static const QColor LightCheckerColor() { return m_LightChecker; }
 private:
   static int m_minFigures, m_maxFigures, m_expNegCutoff, m_expPosCutoff;
   static double m_expNegValue, m_expPosValue;
-  static QFont *m_Font;
-  static float m_FontBaseSize;
+  static QFont *m_Font, *m_FixedFont;
+  static float m_FontBaseSize, m_FixedFontBaseSize;
   static QColor m_DarkChecker, m_LightChecker;
 };
 

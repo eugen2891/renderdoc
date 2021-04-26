@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -77,7 +77,7 @@ static uint64_t GetHandle(WindowingData window)
 #elif ENABLED(RDOC_APPLE)
 
   RDCASSERT(window.system == WindowingSystem::MacOS);
-  return (uint64_t)window.macOS.layer;    // CALayer *
+  return (uint64_t)window.macOS.view;    // NSView *
 
 #else
   RDCFATAL("No windowing data defined for this platform! Must be implemented for replay outputs");
@@ -271,10 +271,6 @@ void ReplayOutput::RefreshOverlay()
     if(draw && m_pDevice->IsRenderOutput(id))
     {
       FloatVector f = m_RenderData.texDisplay.backgroundColor;
-
-      f.x = ConvertLinearToSRGB(f.x);
-      f.y = ConvertLinearToSRGB(f.y);
-      f.z = ConvertLinearToSRGB(f.z);
 
       m_OverlayResourceId =
           m_pDevice->RenderOverlay(id, f, m_RenderData.texDisplay.overlay, m_EventID, passEvents);

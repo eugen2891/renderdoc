@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 2.8.12)
 
+if(APPLE)
+  SET(CMAKE_OSX_ARCHITECTURES "x86_64;arm64" CACHE STRING "Build architectures for Mac OS X" FORCE)
+  SET(CMAKE_OSX_DEPLOYMENT_TARGET "10.15" CACHE STRING "Minimum SDK for Mac OS X" FORCE)
+endif()
+
 # Configure some stuff that needs to be set really early
 if(BUILD_ANDROID)
     if(NOT DEFINED ENV{JAVA_HOME})
@@ -313,6 +318,15 @@ if(cmake_build_type_lower STREQUAL "release" OR
     set(RELEASE_MODE 1)
 endif()
 
+if(STRIP_ANDROID_LIBRARY AND BUILD_ANDROID AND RELEASE_MODE)
+    set(ANDROID_STRIP_TOOL "${ANDROID_TOOLCHAIN_ROOT}/bin/llvm-strip${ANDROID_TOOLCHAIN_SUFFIX}")
+    if(NOT EXISTS "${ANDROID_STRIP_TOOL}")
+        set(ANDROID_STRIP_TOOL "${CMAKE_STRIP}")
+    endif()
+
+    message(STATUS "libraries will be stripped with ${ANDROID_STRIP_TOOL}")
+endif()
+
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -fno-strict-aliasing")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility=hidden -fvisibility-inlines-hidden")
@@ -390,10 +404,20 @@ add_subdirectory(renderdoc)
 # are handled in common
 if(ENABLE_QRENDERDOC OR ENABLE_PYRENDERDOC)
     # Make sure Python 3 is found
-    set(Python_ADDITIONAL_VERSIONS 3.8 3.7 3.6 3.5 3.4)
-    find_package(PythonInterp 3 REQUIRED)
-    find_package(PythonLibs 3 REQUIRED)
-    # we also need python3-config for swig
+    set(Python_ADDITIONAL_VERSIONS 3.9 3.8 3.7 3.6 3.5 3.4)
+    if(NOT ${CMAKE_VERSION} VERSION_LESS "3.12")
+        find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
+        set(PYTHON_EXECUTABLE ${Python3_EXECUTABLE})
+        set(PYTHON_LIBRARY ${Python3_LIBRARIES})
+        set(PYTHON_INCLUDE_DIR ${Python3_INCLUDE_DIRS})
+    else()
+        find_package(PythonInterp 3 REQUIRED)
+        find_package(PythonLibs 3 REQUIRED)
+    endif()
+
+    # we also need python3-config for swig, but it's only for the examples
+    # so it doesn't matter which one we find as long as we find something!
+    # Importantly it doesn't have to match the version we link against
     if(NOT EXISTS "${PYTHON_EXECUTABLE}-config" AND NOT EXISTS "${PYTHON_EXECUTABLE}.${PYTHON_VERSION_MINOR}-config")
         message(FATAL_ERROR "We require ${PYTHON_EXECUTABLE}-config or ${PYTHON_EXECUTABLE}.${PYTHON_VERSION_MINOR}-config to build swig, please install the python dev package for your system.")
     endif()

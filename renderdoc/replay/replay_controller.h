@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -126,7 +126,6 @@ struct ReplayController : public IReplayController
 {
 public:
   ReplayController();
-  virtual ~ReplayController();
 
   APIProperties GetAPIProperties();
 
@@ -144,9 +143,9 @@ public:
   const PipeState &GetPipelineState();
 
   rdcarray<rdcstr> GetDisassemblyTargets(bool withPipeline);
-  rdcstr DisassembleShader(ResourceId pipeline, const ShaderReflection *refl, const char *target);
+  rdcstr DisassembleShader(ResourceId pipeline, const ShaderReflection *refl, const rdcstr &target);
 
-  rdcpair<ResourceId, rdcstr> BuildCustomShader(const char *entry, ShaderEncoding sourceEncoding,
+  rdcpair<ResourceId, rdcstr> BuildCustomShader(const rdcstr &entry, ShaderEncoding sourceEncoding,
                                                 bytebuf source,
                                                 const ShaderCompileFlags &compileFlags,
                                                 ShaderStage type);
@@ -154,7 +153,7 @@ public:
 
   rdcarray<ShaderEncoding> GetCustomShaderEncodings();
   rdcarray<ShaderEncoding> GetTargetShaderEncodings();
-  rdcpair<ResourceId, rdcstr> BuildTargetShader(const char *entry, ShaderEncoding sourceEncoding,
+  rdcpair<ResourceId, rdcstr> BuildTargetShader(const rdcstr &entry, ShaderEncoding sourceEncoding,
                                                 bytebuf source,
                                                 const ShaderCompileFlags &compileFlags,
                                                 ShaderStage type);
@@ -182,12 +181,13 @@ public:
   rdcpair<PixelValue, PixelValue> GetMinMax(ResourceId textureId, const Subresource &sub,
                                             CompType typeCast);
   rdcarray<uint32_t> GetHistogram(ResourceId textureId, const Subresource &sub, CompType typeCast,
-                                  float minval, float maxval, bool channels[4]);
+                                  float minval, float maxval, const rdcfixedarray<bool, 4> &channels);
   rdcarray<PixelModification> PixelHistory(ResourceId target, uint32_t x, uint32_t y,
                                            const Subresource &sub, CompType typeCast);
   ShaderDebugTrace *DebugVertex(uint32_t vertid, uint32_t instid, uint32_t idx, uint32_t view);
   ShaderDebugTrace *DebugPixel(uint32_t x, uint32_t y, uint32_t sample, uint32_t primitive);
-  ShaderDebugTrace *DebugThread(const uint32_t groupid[3], const uint32_t threadid[3]);
+  ShaderDebugTrace *DebugThread(const rdcfixedarray<uint32_t, 3> &groupid,
+                                const rdcfixedarray<uint32_t, 3> &threadid);
   rdcarray<ShaderDebugState> ContinueDebug(ShaderDebugger *debugger);
   void FreeTrace(ShaderDebugTrace *trace);
 
@@ -198,10 +198,10 @@ public:
   bytebuf GetBufferData(ResourceId buff, uint64_t offset, uint64_t len);
   bytebuf GetTextureData(ResourceId buff, const Subresource &sub);
 
-  bool SaveTexture(const TextureSave &saveData, const char *path);
+  bool SaveTexture(const TextureSave &saveData, const rdcstr &path);
 
   rdcarray<ShaderVariable> GetCBufferVariableContents(ResourceId pipeline, ResourceId shader,
-                                                      const char *entryPoint, uint32_t cbufslot,
+                                                      const rdcstr &entryPoint, uint32_t cbufslot,
                                                       ResourceId buffer, uint64_t offset,
                                                       uint64_t length);
 
@@ -218,6 +218,7 @@ public:
   void Shutdown();
 
 private:
+  virtual ~ReplayController();
   ReplayStatus PostCreateInit(IReplayDriver *device, RDCFile *rdc);
 
   void FetchPipelineState(uint32_t eventId);

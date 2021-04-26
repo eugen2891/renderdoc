@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -802,6 +802,8 @@ bool SettingsDialog::editTool(int existing, ShaderProcessingTool &tool)
     tool.output = ShaderEncoding(outputEdit.currentIndex() + 1);
 
     QString message;
+
+    invalid = false;
 
     // ensure we don't have an invalid name
     if(tool.name == "Builtin")

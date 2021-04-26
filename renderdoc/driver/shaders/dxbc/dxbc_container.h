@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -38,8 +38,9 @@ namespace DXBC
 {
 class IDebugInfo;
 struct Reflection;
-IDebugInfo *MakeSDBGChunk(void *data);
-IDebugInfo *MakeSPDBChunk(void *data);
+IDebugInfo *ProcessSDBGChunk(void *data);
+IDebugInfo *ProcessSPDBChunk(void *data);
+IDebugInfo *ProcessPDB(byte *data, uint32_t length);
 bool IsPDBFile(void *data, size_t length);
 void UnwrapEmbeddedPDBData(bytebuf &bytes);
 };

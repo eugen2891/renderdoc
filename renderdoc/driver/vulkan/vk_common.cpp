@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -344,6 +344,10 @@ bool VkInitParams::IsSupportedVersion(uint64_t ver)
   if(ver == CurrentVersion)
     return true;
 
+  // 0x12 -> 0x13 - added full sparse resource support
+  if(ver == 0x12)
+    return true;
+
   // 0x11 -> 0x12 - added inline uniform block support
   if(ver == 0x11)
     return true;
@@ -380,27 +384,6 @@ bool VkInitParams::IsSupportedVersion(uint64_t ver)
   return false;
 }
 
-VkAccessFlags MakeAccessMask(VkImageLayout layout)
-{
-  switch(layout)
-  {
-    case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
-      return VkAccessFlags(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT);
-    case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
-      return VkAccessFlags(VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
-                           VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT);
-    case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL: return VkAccessFlags(VK_ACCESS_TRANSFER_WRITE_BIT);
-    case VK_IMAGE_LAYOUT_PREINITIALIZED: return VkAccessFlags(VK_ACCESS_HOST_WRITE_BIT);
-    case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
-      return VkAccessFlags(VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT);
-    case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-      return VkAccessFlags(VK_ACCESS_INPUT_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT);
-    case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL: return VkAccessFlags(VK_ACCESS_TRANSFER_READ_BIT);
-    default: break;
-  }
-
-  return VkAccessFlags(0);
-}
 void SanitiseReplayImageLayout(VkImageLayout &layout)
 {
   // we don't replay with present layouts since we don't create actual swapchains. So change any
@@ -538,6 +521,25 @@ int StageIndex(VkShaderStageFlagBits stageFlag)
   return 0;
 }
 
+VkShaderStageFlags ShaderMaskFromIndex(size_t index)
+{
+  VkShaderStageFlagBits mask[] = {
+      VK_SHADER_STAGE_VERTEX_BIT,
+      VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT,
+      VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT,
+      VK_SHADER_STAGE_GEOMETRY_BIT,
+      VK_SHADER_STAGE_FRAGMENT_BIT,
+      VK_SHADER_STAGE_COMPUTE_BIT,
+  };
+
+  if(index < ARRAY_COUNT(mask))
+    return mask[index];
+
+  RDCERR("Unrecognised shader stage index %d", index);
+
+  return 0;
+}
+
 void DoPipelineBarrier(VkCommandBuffer cmd, size_t count, const VkImageMemoryBarrier *barriers)
 {
   RDCASSERT(cmd != VK_NULL_HANDLE);
@@ -657,24 +659,18 @@ AddressMode MakeAddressMode(VkSamplerAddressMode addr)
   return AddressMode::Wrap;
 }
 
-void MakeBorderColor(VkBorderColor border, FloatVector *BorderColor)
+void MakeBorderColor(VkBorderColor border, rdcfixedarray<float, 4> &BorderColor)
 {
   // we don't distinguish float/int, assume it matches
   switch(border)
   {
     case VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK:
-    case VK_BORDER_COLOR_INT_TRANSPARENT_BLACK:
-      *BorderColor = FloatVector(0.0f, 0.0f, 0.0f, 0.0f);
-      break;
+    case VK_BORDER_COLOR_INT_TRANSPARENT_BLACK: BorderColor = {0.0f, 0.0f, 0.0f, 0.0f}; break;
     case VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK:
-    case VK_BORDER_COLOR_INT_OPAQUE_BLACK:
-      *BorderColor = FloatVector(0.0f, 0.0f, 0.0f, 1.0f);
-      break;
+    case VK_BORDER_COLOR_INT_OPAQUE_BLACK: BorderColor = {0.0f, 0.0f, 0.0f, 1.0f}; break;
     case VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE:
-    case VK_BORDER_COLOR_INT_OPAQUE_WHITE:
-      *BorderColor = FloatVector(1.0f, 1.0f, 1.0f, 1.0f);
-      break;
-    default: memset(BorderColor, 0, sizeof(FloatVector)); break;
+    case VK_BORDER_COLOR_INT_OPAQUE_WHITE: BorderColor = {1.0f, 1.0f, 1.0f, 1.0f}; break;
+    default: BorderColor = {0.0f, 0.0f, 0.0f, 0.0f}; break;
   }
 }
 
@@ -973,14 +969,16 @@ VkDriverInfo::VkDriverInfo(const VkPhysicalDeviceProperties &physProps)
 
   if(m_Vendor == GPUVendor::AMD)
   {
-    // not yet fixed
-    amdBDABrokenDriver = true;
+    // driver 21.3.1 which is vulkan version >= 2.0.179 contains the fix
+    if(physProps.driverVersion < VK_MAKE_VERSION(2, 0, 179))
+      amdBDABrokenDriver = true;
   }
 #endif
 
-  // not fixed yet
+  // not fixed yet that I know of
   qualcommLeakingUBOOffsets = (m_Vendor == GPUVendor::Qualcomm);
   qualcommDrefNon2DCompileCrash = (m_Vendor == GPUVendor::Qualcomm);
+  qualcommLineWidthCrash = (m_Vendor == GPUVendor::Qualcomm);
 }
 
 FrameRefType GetRefType(VkDescriptorType descType)
@@ -1063,90 +1061,54 @@ void DescriptorSetSlotImageInfo::SetFrom(const VkDescriptorImageInfo &imInfo, bo
   imageLayout = imInfo.imageLayout;
 }
 
-void DescriptorSetSlot::RemoveBindRefs(rdcarray<ResourceId> &ids, VulkanResourceManager *rm,
-                                       VkResourceRecord *record)
+void AddBindFrameRef(DescriptorBindRefs &refs, ResourceId id, FrameRefType ref)
 {
-  SCOPED_LOCK(record->descInfo->refLock);
-
-  if(texelBufferView != ResourceId())
+  if(id == ResourceId())
   {
-    record->RemoveBindFrameRef(ids, texelBufferView);
-
-    VkResourceRecord *viewRecord = rm->GetResourceRecord(texelBufferView);
-    if(viewRecord && viewRecord->baseResource != ResourceId())
-      record->RemoveBindFrameRef(ids, viewRecord->baseResource);
-    if(viewRecord && viewRecord->baseResourceMem != ResourceId())
-      record->RemoveBindFrameRef(ids, viewRecord->baseResourceMem);
+    RDCERR("Unexpected NULL resource ID being added as a bind frame ref");
+    return;
   }
-  if(imageInfo.imageView != ResourceId())
-  {
-    record->RemoveBindFrameRef(ids, imageInfo.imageView);
-
-    VkResourceRecord *viewRecord = rm->GetResourceRecord(imageInfo.imageView);
-    if(viewRecord)
-    {
-      record->RemoveBindFrameRef(ids, viewRecord->baseResource);
-      if(viewRecord->baseResourceMem != ResourceId())
-        record->RemoveBindFrameRef(ids, viewRecord->baseResourceMem);
-    }
-  }
-  if(imageInfo.sampler != ResourceId())
-  {
-    record->RemoveBindFrameRef(ids, imageInfo.sampler);
-  }
-  if(bufferInfo.buffer != ResourceId())
-  {
-    record->RemoveBindFrameRef(ids, bufferInfo.buffer);
-
-    VkResourceRecord *bufRecord = rm->GetResourceRecord(bufferInfo.buffer);
-    if(bufRecord && bufRecord->baseResource != ResourceId())
-      record->RemoveBindFrameRef(ids, bufRecord->baseResource);
-  }
-
-  // NULL everything out now so that we don't accidentally reference an object
-  // that was removed already
-  texelBufferView = ResourceId();
-  bufferInfo.buffer = ResourceId();
-  imageInfo.imageView = ResourceId();
-  imageInfo.sampler = ResourceId();
+  FrameRefType &p = refs.bindFrameRefs[id];
+  // be conservative - mark refs as read before write if we see a write and a read ref on it
+  p = ComposeFrameRefsUnordered(p, ref);
 }
 
-void DescriptorSetSlot::AddBindRefs(rdcarray<ResourceId> &ids, VkResourceRecord *bufView,
-                                    VkResourceRecord *imgView, VkResourceRecord *buffer,
-                                    VkResourceRecord *descSetRecord, FrameRefType ref)
+void AddImgFrameRef(DescriptorBindRefs &refs, VkResourceRecord *view, FrameRefType refType)
 {
-  SCOPED_LOCK(descSetRecord->descInfo->refLock);
+  AddBindFrameRef(refs, view->GetResourceID(), eFrameRef_Read);
+  if(view->resInfo && view->resInfo->IsSparse())
+    refs.sparseRefs.insert(view);
+  if(view->baseResourceMem != ResourceId())
+    AddBindFrameRef(refs, view->baseResourceMem, eFrameRef_Read);
 
-  if(bufView)
-  {
-    descSetRecord->AddBindFrameRef(ids, bufView->GetResourceID(), eFrameRef_Read,
-                                   bufView->resInfo && bufView->resInfo->IsSparse());
-    if(bufView->baseResource != ResourceId())
-      descSetRecord->AddBindFrameRef(ids, bufView->baseResource, eFrameRef_Read);
-    if(bufView->baseResourceMem != ResourceId())
-      descSetRecord->AddMemFrameRef(ids, bufView->baseResourceMem, bufView->memOffset,
-                                    bufView->memSize, ref);
-  }
-  if(imgView)
-  {
-    descSetRecord->AddImgFrameRef(ids, imgView, ref);
-  }
-  if(imageInfo.sampler != ResourceId())
-  {
-    descSetRecord->AddBindFrameRef(ids, imageInfo.sampler, eFrameRef_Read);
-  }
-  if(buffer)
-  {
-    descSetRecord->AddBindFrameRef(ids, bufferInfo.buffer, eFrameRef_Read,
-                                   buffer->resInfo && buffer->resInfo->IsSparse());
-    if(buffer->baseResource != ResourceId())
-      descSetRecord->AddMemFrameRef(ids, buffer->baseResource, buffer->memOffset, buffer->memSize,
-                                    ref);
-  }
+  FrameRefType &p = refs.bindFrameRefs[view->baseResource];
+
+  ImageRange imgRange = ImageRange((VkImageSubresourceRange)view->viewRange);
+  imgRange.viewType = view->viewRange.viewType();
+
+  FrameRefType maxRef =
+      MarkImageReferenced(refs.bindImageStates, view->baseResource, view->resInfo->imageInfo,
+                          ImageSubresourceRange(imgRange), VK_QUEUE_FAMILY_IGNORED, refType);
+
+  p = ComposeFrameRefsDisjoint(p, maxRef);
 }
 
-void DescriptorSetSlot::AddBindRefs(rdcarray<ResourceId> &ids, VulkanResourceManager *rm,
-                                    VkResourceRecord *descSetRecord, FrameRefType ref)
+void AddMemFrameRef(DescriptorBindRefs &refs, ResourceId mem, VkDeviceSize offset,
+                    VkDeviceSize size, FrameRefType refType)
+{
+  if(mem == ResourceId())
+  {
+    RDCERR("Unexpected NULL resource ID being added as a bind frame ref");
+    return;
+  }
+  FrameRefType &p = refs.bindFrameRefs[mem];
+  FrameRefType maxRef =
+      MarkMemoryReferenced(refs.bindMemRefs, mem, offset, size, refType, ComposeFrameRefsUnordered);
+  p = ComposeFrameRefsDisjoint(p, maxRef);
+}
+
+void DescriptorSetSlot::AccumulateBindRefs(DescriptorBindRefs &refs, VulkanResourceManager *rm,
+                                           FrameRefType ref) const
 {
   VkResourceRecord *bufView = NULL, *imgView = NULL, *buffer = NULL;
 
@@ -1157,65 +1119,38 @@ void DescriptorSetSlot::AddBindRefs(rdcarray<ResourceId> &ids, VulkanResourceMan
   if(bufferInfo.buffer != ResourceId())
     buffer = rm->GetResourceRecord(bufferInfo.buffer);
 
-  AddBindRefs(ids, bufView, imgView, buffer, descSetRecord, ref);
-}
-
-void DescriptorSetData::UpdateBackgroundRefCache(const rdcarray<ResourceId> &ids)
-{
-  SCOPED_LOCK(refLock);
-
-  if(backgroundFrameRefs.empty())
+  if(bufView)
   {
-    for(auto refit = bindFrameRefs.begin(); refit != bindFrameRefs.end(); ++refit)
-      backgroundFrameRefs.insert(make_rdcpair(refit->first, refit->second.second));
-    return;
+    AddBindFrameRef(refs, bufView->GetResourceID(), eFrameRef_Read);
+    if(bufView->resInfo && bufView->resInfo->IsSparse())
+      refs.sparseRefs.insert(bufView);
+    if(bufView->baseResource != ResourceId())
+      AddBindFrameRef(refs, bufView->baseResource, eFrameRef_Read);
+    if(bufView->baseResourceMem != ResourceId())
+      AddMemFrameRef(refs, bufView->baseResourceMem, bufView->memOffset, bufView->memSize, ref);
   }
-
-  rdcpair<ResourceId, FrameRefType> *cacheit = backgroundFrameRefs.begin();
-  for(auto refit = ids.begin(); refit != ids.end(); ++refit)
+  if(imgView)
   {
-    ResourceId id = *refit;
-
-    // find the Id we're looking for in the remainder of the cache. This won't skip over any one
-    // that we care about because we're iterating in ascending Id order
-    cacheit = std::lower_bound(cacheit, backgroundFrameRefs.end(), id,
-                               [](const rdcpair<ResourceId, FrameRefType> &a,
-                                  const ResourceId &id) { return a.first < id; });
-
-    auto bindit = bindFrameRefs.find(id);
-
-    // this id is no longer referenced, remove from the cache
-    if(bindit == bindFrameRefs.end())
-    {
-      if(cacheit != backgroundFrameRefs.end())
-        backgroundFrameRefs.erase(cacheit);
-      continue;
-    }
-
-    FrameRefType refType = bindit->second.second;
-
-    // if we didn't find a match, insert the desired entry here
-    if(cacheit == backgroundFrameRefs.end() || cacheit->first != id)
-    {
-      // calculate the index
-      size_t idx = cacheit - backgroundFrameRefs.begin();
-      // insert the entry
-      backgroundFrameRefs.insert(cacheit, {id, refType});
-      // re-initialise our iterator to point here, as the above insert might have invalidated it due
-      // to a resize
-      cacheit = backgroundFrameRefs.begin() + idx;
-    }
-    else
-    {
-      // update the frameref
-      cacheit->second = refType;
-    }
+    AddImgFrameRef(refs, imgView, ref);
+  }
+  if(imageInfo.sampler != ResourceId())
+  {
+    AddBindFrameRef(refs, imageInfo.sampler, eFrameRef_Read);
+  }
+  if(buffer)
+  {
+    AddBindFrameRef(refs, bufferInfo.buffer, eFrameRef_Read);
+    if(buffer->resInfo && buffer->resInfo->IsSparse())
+      refs.sparseRefs.insert(buffer);
+    if(buffer->baseResource != ResourceId())
+      AddMemFrameRef(refs, buffer->baseResource, buffer->memOffset, buffer->memSize, ref);
   }
 }
 
 #if ENABLED(ENABLE_UNIT_TESTS)
 
 #undef None
+#undef Always
 
 #include "catch/catch.hpp"
 

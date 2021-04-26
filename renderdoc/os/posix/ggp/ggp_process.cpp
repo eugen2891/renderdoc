@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -46,7 +46,7 @@ rdcarray<int> getSockets(pid_t childPid)
   rdcarray<int> sockets;
   rdcstr dirPath = StringFormat::Fmt("/proc/%d/fd", (int)childPid);
   rdcarray<PathEntry> files;
-  FileIO::GetFilesInDirectory(dirPath.c_str(), files);
+  FileIO::GetFilesInDirectory(dirPath, files);
   if(files.empty())
     return sockets;
 
@@ -83,7 +83,7 @@ int GetIdentPort(pid_t childPid)
 
     waitTime *= 2;
 
-    FILE *f = FileIO::fopen(procfile.c_str(), "r");
+    FILE *f = FileIO::fopen(procfile, FileIO::ReadText);
 
     if(f == NULL)
     {
@@ -126,7 +126,7 @@ int GetIdentPort(pid_t childPid)
             (uint32_t)RenderDoc_FirstTargetControlPort, (uint32_t)RenderDoc_LastTargetControlPort,
             procfile.c_str());
 
-    if(!FileIO::exists(procfile.c_str()))
+    if(!FileIO::exists(procfile))
     {
       RDCWARN("Process %u is no longer running - did it exit during initialisation or fail to run?",
               childPid);
@@ -157,7 +157,7 @@ bool debuggerPresent = false;
 
 void CacheDebuggerPresent()
 {
-  FILE *f = FileIO::fopen("/proc/self/status", "r");
+  FILE *f = FileIO::fopen("/proc/self/status", FileIO::ReadText);
 
   if(f == NULL)
   {
@@ -192,14 +192,15 @@ bool OSUtility::DebuggerPresent()
   return debuggerPresent;
 }
 
-const char *Process::GetEnvVariable(const char *name)
+rdcstr Process::GetEnvVariable(const rdcstr &name)
 {
-  return getenv(name);
+  const char *val = getenv(name.c_str());
+  return val ? val : rdcstr();
 }
 
 uint64_t Process::GetMemoryUsage()
 {
-  FILE *f = FileIO::fopen("/proc/self/statm", "r");
+  FILE *f = FileIO::fopen("/proc/self/statm", FileIO::ReadText);
 
   if(f == NULL)
   {
@@ -209,6 +210,8 @@ uint64_t Process::GetMemoryUsage()
 
   char line[512] = {};
   fgets(line, 511, f);
+
+  FileIO::fclose(f);
 
   uint32_t vmPages = 0;
   int num = sscanf(line, "%u", &vmPages);

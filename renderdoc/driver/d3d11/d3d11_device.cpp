@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -1257,7 +1257,6 @@ bool WrappedID3D11Device::Serialise_CaptureScope(SerialiserType &ser)
     GetReplay()->WriteFrameRecord().frameInfo.frameNumber = frameNumber;
 
     FrameStatistics &stats = GetReplay()->WriteFrameRecord().frameInfo.stats;
-    RDCEraseEl(stats);
 
     // #mivance GL/Vulkan don't set this so don't get stats in window
     stats.recorded = true;
@@ -1526,10 +1525,13 @@ void WrappedID3D11Device::NewSwapchainBuffer(IUnknown *backbuffer)
 {
   WrappedID3D11Texture2D1 *wrapped = (WrappedID3D11Texture2D1 *)backbuffer;
 
-  // add internal reference to keep this texture alive
-  SAFE_INTADDREF(wrapped);
-  // release the external reference
-  wrapped->Release();
+  if(wrapped)
+  {
+    // add internal reference to keep this texture alive
+    SAFE_INTADDREF(wrapped);
+    // release the external reference
+    wrapped->Release();
+  }
 }
 
 void WrappedID3D11Device::ReleaseSwapchainResources(IDXGISwapper *swapper, UINT QueueCount,
@@ -1640,55 +1642,60 @@ bool WrappedID3D11Device::Serialise_WrapSwapchainBuffer(SerialiserType &ser, IDX
 IUnknown *WrappedID3D11Device::WrapSwapchainBuffer(IDXGISwapper *swapper, DXGI_FORMAT bufferFormat,
                                                    UINT buffer, IUnknown *realSurface)
 {
+  // need to flush pending dead now so we don't find a 'dead' wrapper below
+  FlushPendingDead();
+
+  WrappedID3D11Texture2D1 *pTex = NULL;
+
   if(GetResourceManager()->HasWrapper((ID3D11DeviceChild *)realSurface))
   {
-    ID3D11Texture2D *tex =
-        (ID3D11Texture2D *)GetResourceManager()->GetWrapper((ID3D11DeviceChild *)realSurface);
-    tex->AddRef();
+    pTex =
+        (WrappedID3D11Texture2D1 *)GetResourceManager()->GetWrapper((ID3D11DeviceChild *)realSurface);
+    pTex->AddRef();
+    Resurrect(pTex);
 
     realSurface->Release();
-
-    return tex;
   }
-
-  WrappedID3D11Texture2D1 *pTex =
-      new WrappedID3D11Texture2D1((ID3D11Texture2D *)realSurface, this, TEXDISPLAY_UNKNOWN);
-
-  SetDebugName(pTex, "Swap Chain Backbuffer");
-
-  D3D11_TEXTURE2D_DESC desc;
-  pTex->GetDesc(&desc);
-
-  ResourceId id = pTex->GetResourceID();
-
-  // init the text renderer
-  if(m_TextRenderer == NULL)
-    m_TextRenderer = new D3D11TextRenderer(this);
-
-  // there shouldn't be a resource record for this texture as it wasn't created via
-  // CreateTexture2D
-  RDCASSERT(id != ResourceId() && !GetResourceManager()->HasResourceRecord(id));
-
-  if(IsCaptureMode(m_State))
+  else
   {
-    D3D11ResourceRecord *record = GetResourceManager()->AddResourceRecord(id);
-    record->DataInSerialiser = false;
-    record->Length = 0;
-    record->NumSubResources = 0;
-    record->SubResources = NULL;
+    pTex = new WrappedID3D11Texture2D1((ID3D11Texture2D *)realSurface, this, TEXDISPLAY_UNKNOWN);
 
-    SCOPED_LOCK(m_D3DLock);
+    SetDebugName(pTex, "Swap Chain Backbuffer");
 
-    WriteSerialiser &ser = m_ScratchSerialiser;
+    D3D11_TEXTURE2D_DESC desc;
+    pTex->GetDesc(&desc);
 
-    SCOPED_SERIALISE_CHUNK(D3D11Chunk::CreateSwapBuffer);
+    ResourceId id = pTex->GetResourceID();
 
-    Serialise_WrapSwapchainBuffer(ser, swapper, bufferFormat, buffer, pTex);
+    // init the text renderer
+    if(m_TextRenderer == NULL)
+      m_TextRenderer = new D3D11TextRenderer(this);
 
-    record->AddChunk(scope.Get());
+    // there shouldn't be a resource record for this texture as it wasn't created via
+    // CreateTexture2D
+    RDCASSERT(id != ResourceId() && !GetResourceManager()->HasResourceRecord(id));
+
+    if(IsCaptureMode(m_State))
+    {
+      D3D11ResourceRecord *record = GetResourceManager()->AddResourceRecord(id);
+      record->DataInSerialiser = false;
+      record->Length = 0;
+      record->NumSubResources = 0;
+      record->SubResources = NULL;
+
+      SCOPED_LOCK(m_D3DLock);
+
+      WriteSerialiser &ser = m_ScratchSerialiser;
+
+      SCOPED_SERIALISE_CHUNK(D3D11Chunk::CreateSwapBuffer);
+
+      Serialise_WrapSwapchainBuffer(ser, swapper, bufferFormat, buffer, pTex);
+
+      record->AddChunk(scope.Get());
+    }
   }
 
-  if(buffer == 0 && IsCaptureMode(m_State))
+  if(buffer == 0 && IsCaptureMode(m_State) && m_SwapChains[swapper] == NULL)
   {
     ID3D11RenderTargetView *rtv = NULL;
     HRESULT hr = m_pDevice->CreateRenderTargetView(UNWRAP(WrappedID3D11Texture2D1, pTex), NULL, &rtv);
@@ -1706,9 +1713,14 @@ IDXGIResource *WrappedID3D11Device::WrapExternalDXGIResource(IDXGIResource *res)
 {
   ID3D11Resource *d3d11res;
   res->QueryInterface(__uuidof(ID3D11Resource), (void **)&d3d11res);
+
+  // need to flush pending dead now so we don't find a 'dead' wrapper below
+  FlushPendingDead();
+
   if(GetResourceManager()->HasWrapper(d3d11res))
   {
     ID3D11DeviceChild *wrapper = GetResourceManager()->GetWrapper(d3d11res);
+    Resurrect(wrapper);
     IDXGIResource *ret = NULL;
     wrapper->QueryInterface(__uuidof(IDXGIResource), (void **)&ret);
     res->Release();
@@ -1732,6 +1744,23 @@ void WrappedID3D11Device::ReportDeath(ID3D11DeviceChild *obj)
   // efficient but it's not the end of the world
   if(m_RefCount == 0 || IsReplayMode(m_State))
     FlushPendingDead();
+}
+
+void WrappedID3D11Device::Resurrect(ID3D11DeviceChild *obj)
+{
+  SCOPED_LOCK(m_D3DLock);
+
+  // if we're about to re-use a wrapper that was previously slated for destruction, normally we try
+  // to just destroy it first. However while in frame capture we don't destroy anything to be safe,
+  // so it could be that something bounces back into life - here we remove it from the dead objects
+  // list.
+  while(true)
+  {
+    int idx = m_DeadObjects.indexOf(obj);
+    if(idx < 0)
+      break;
+    m_DeadObjects.erase(idx);
+  }
 }
 
 void WrappedID3D11Device::FlushPendingDead()
@@ -2081,6 +2110,8 @@ bool WrappedID3D11Device::EndFrameCapture(void *dev, void *wnd)
       captureWriter = new StreamWriter(StreamWriter::InvalidStream);
     }
 
+    uint64_t captureSectionSize = 0;
+
     {
       WriteSerialiser ser(captureWriter, Ownership::Stream);
 
@@ -2150,11 +2181,12 @@ bool WrappedID3D11Device::EndFrameCapture(void *dev, void *wnd)
       }
 
       UnlockForChunkFlushing();
+
+      captureSectionSize = captureWriter->GetOffset();
     }
 
     RDCLOG("Captured D3D11 frame with %f MB capture section in %f seconds",
-           double(captureWriter->GetOffset()) / (1024.0 * 1024.0),
-           m_CaptureTimer.GetMilliseconds() / 1000.0);
+           double(captureSectionSize) / (1024.0 * 1024.0), m_CaptureTimer.GetMilliseconds() / 1000.0);
 
     RenderDoc::Inst().FinishCaptureWriting(rdc, m_CapturedFrames.back().frameNumber);
 

@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2020 Baldur Karlsson
+ * Copyright (c) 2020-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -93,14 +93,14 @@ static uint32_t VarByteSize(const ShaderVariable &var)
 static void *VarElemPointer(ShaderVariable &var, uint32_t comp)
 {
   RDCASSERTNOTEQUAL(var.type, VarType::Unknown);
-  byte *ret = (byte *)var.value.u64v;
+  byte *ret = (byte *)var.value.u8v.data();
   return ret + comp * VarTypeByteSize(var.type);
 }
 
 static const void *VarElemPointer(const ShaderVariable &var, uint32_t comp)
 {
   RDCASSERTNOTEQUAL(var.type, VarType::Unknown);
-  const byte *ret = (const byte *)var.value.u64v;
+  const byte *ret = (const byte *)var.value.u8v.data();
   return ret + comp * VarTypeByteSize(var.type);
 }
 
@@ -416,9 +416,9 @@ void Reflector::CheckDebuggable(bool &debuggable, rdcstr &debugStatus) const
       }
 
       // raytracing
-      case Capability::RayQueryProvisionalKHR:
-      case Capability::RayTraversalPrimitiveCullingProvisionalKHR:
-      case Capability::RayTracingProvisionalKHR:
+      case Capability::RayQueryKHR:
+      case Capability::RayTraversalPrimitiveCullingKHR:
+      case Capability::RayTracingKHR:
       {
         supported = false;
         break;
@@ -476,6 +476,14 @@ void Reflector::CheckDebuggable(bool &debuggable, rdcstr &debugStatus) const
       case Capability::BlockingPipesINTEL:
       case Capability::Max:
       case Capability::Invalid:
+      {
+        supported = false;
+        break;
+      }
+
+      // deprecated provisional raytracing
+      case Capability::RayQueryProvisionalKHR:
+      case Capability::RayTracingProvisionalKHR:
       {
         supported = false;
         break;
@@ -667,7 +675,7 @@ ShaderDebugTrace *Debugger::BeginDebug(DebugAPIWrapper *api, const ShaderStage s
         else
         {
           // make it obvious when uninitialised outputs are written
-          memset(var.value.u64v, 0xcc, sizeof(var.value.u64v));
+          memset(&var.value, 0xcc, sizeof(var.value));
         }
 
         if(sourceName != rawName)
@@ -815,7 +823,8 @@ ShaderDebugTrace *Debugger::BeginDebug(DebugAPIWrapper *api, const ShaderStage s
             // non-matrix case is simple, just read the size of the variable
             if(var.rows == 1)
             {
-              this->apiWrapper->ReadBufferValue(bindpoint, offset, VarByteSize(var), var.value.uv);
+              this->apiWrapper->ReadBufferValue(bindpoint, offset, VarByteSize(var),
+                                                var.value.u8v.data());
             }
             else
             {
@@ -1016,7 +1025,7 @@ ShaderDebugTrace *Debugger::BeginDebug(DebugAPIWrapper *api, const ShaderStage s
         if(!var.members.empty())
           return;
 
-        memset(var.value.u64v, 0xcc, sizeof(var.value.u64v));
+        memset(&var.value, 0xcc, sizeof(var.value));
       };
 
       WalkVariable<ShaderVariable, true>(decorations[v.id], dataTypes[type.InnerType()], ~0U, var,
@@ -1511,18 +1520,33 @@ ShaderVariable Debugger::ReadFromPointer(const ShaderVariable &ptr) const
 
     bind.arrayIndex = (uint32_t)ptr.value.u64v[ArrayVariableSlot];
 
-    uint32_t matrixStride = (uint32_t)ptr.value.u64v[MajorStrideVariableSlot];
-    bool rowMajor = (matrixStride & 0x80000000U) != 0;
-    matrixStride &= 0xff;
+    uint32_t varMatrixStride = (uint32_t)ptr.value.u64v[MajorStrideVariableSlot];
 
-    auto readCallback = [this, bind, matrixStride, rowMajor](
-        ShaderVariable &var, const Decorations &, const DataType &type, uint64_t offset,
-        const rdcstr &) {
+    Decorations parentDecorations;
+    if((varMatrixStride & 0x80000000U) != 0)
+      parentDecorations.flags = Decorations::RowMajor;
+    else
+      parentDecorations.flags = Decorations::ColMajor;
+
+    varMatrixStride &= 0xff;
+
+    if(varMatrixStride != 0)
+    {
+      parentDecorations.flags =
+          Decorations::Flags(parentDecorations.flags | Decorations::HasMatrixStride);
+      parentDecorations.matrixStride = varMatrixStride;
+    }
+
+    auto readCallback = [this, bind](ShaderVariable &var, const Decorations &dec,
+                                     const DataType &type, uint64_t offset, const rdcstr &) {
 
       // ignore any callbacks we get on the way up for structs/arrays, we don't need it we only read
       // or write at primitive level
       if(!var.members.empty())
         return;
+
+      bool rowMajor = (dec.flags & Decorations::RowMajor) != 0;
+      uint32_t matrixStride = dec.matrixStride;
 
       if(type.type == DataType::MatrixType)
       {
@@ -1579,8 +1603,8 @@ ShaderVariable Debugger::ReadFromPointer(const ShaderVariable &ptr) const
       }
     };
 
-    WalkVariable<ShaderVariable, true>(Decorations(), dataTypes[typeId], byteOffset, ret, rdcstr(),
-                                       readCallback);
+    WalkVariable<ShaderVariable, true>(parentDecorations, dataTypes[typeId], byteOffset, ret,
+                                       rdcstr(), readCallback);
 
     ret.name = ptr.name;
     return ret;
@@ -1949,7 +1973,7 @@ void Debugger::AllocateVariable(Id id, Id typeId, ShaderVariable &outVar)
       return;
 
     // make it obvious when uninitialised values are used
-    memset(var.value.u64v, 0xcc, sizeof(var.value.u64v));
+    memset(&var.value, 0xcc, sizeof(var.value));
   };
 
   WalkVariable<ShaderVariable, true>(Decorations(), dataTypes[dataTypes[typeId].InnerType()], ~0U,
@@ -2161,10 +2185,10 @@ static void ApplyDerivative(uint32_t activeLaneIndex, uint32_t quadIndex, FloatT
 
 #define ADD_DERIV(src)       \
   for(int i = 0; i < 4; i++) \
-    dst[i] += ((FloatType *)src.value.u64v)[i];
+    dst[i] += comp<FloatType>(src, i);
 #define SUB_DERIV(src)       \
   for(int i = 0; i < 4; i++) \
-    dst[i] -= ((FloatType *)src.value.u64v)[i];
+    dst[i] -= comp<FloatType>(src, i);
 
   switch(activeLaneIndex)
   {
@@ -2280,12 +2304,12 @@ uint32_t Debugger::ApplyDerivatives(uint32_t quadIndex, const Decorations &curDe
         apiWrapper->GetDerivative(builtin, location, component, outVar.type);
 
     if(outVar.type == VarType::Float)
-      ApplyDerivative<float>(activeLaneIndex, quadIndex, outVar.value.fv, derivs);
+      ApplyDerivative<float>(activeLaneIndex, quadIndex, outVar.value.f32v.data(), derivs);
     else if(outVar.type == VarType::Half)
       ApplyDerivative<half_float::half>(activeLaneIndex, quadIndex,
-                                        (half_float::half *)outVar.value.u16v, derivs);
+                                        (half_float::half *)outVar.value.u16v.data(), derivs);
     else if(outVar.type == VarType::Double)
-      ApplyDerivative<double>(activeLaneIndex, quadIndex, outVar.value.dv, derivs);
+      ApplyDerivative<double>(activeLaneIndex, quadIndex, outVar.value.f64v.data(), derivs);
   }
 
   // each row consumes a new location

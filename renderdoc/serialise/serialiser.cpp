@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -43,7 +43,7 @@ void DumpObject(FileIO::LogFileHandle *log, const rdcstr &indent, SDObject *obj)
     rdcstr msg =
         StringFormat::Fmt("%s%s%s %s:\n", indent.c_str(), obj->type.name.c_str(),
                           obj->type.basetype == SDBasic::Array ? "[]" : "", obj->name.c_str());
-    FileIO::logfile_append(log, msg.c_str(), msg.size());
+    FileIO::logfile_append(log, msg.c_str(), msg.length());
     for(size_t i = 0; i < obj->NumChildren(); i++)
       DumpObject(log, indent + "  ", obj->GetChild(i));
   }
@@ -71,7 +71,7 @@ void DumpObject(FileIO::LogFileHandle *log, const rdcstr &indent, SDObject *obj)
     }
     rdcstr msg = StringFormat::Fmt("%s%s %s = %s\n", indent.c_str(), obj->type.name.c_str(),
                                    obj->name.c_str(), val.c_str());
-    FileIO::logfile_append(log, msg.c_str(), msg.size());
+    FileIO::logfile_append(log, msg.c_str(), msg.length());
   }
 }
 
@@ -79,7 +79,7 @@ void DumpChunk(bool reading, FileIO::LogFileHandle *log, SDChunk *chunk)
 {
   rdcstr msg = StringFormat::Fmt("%s %s @ %llu:\n", reading ? "Read" : "Wrote", chunk->name.c_str(),
                                  chunk->metadata.timestampMicro);
-  FileIO::logfile_append(log, msg.c_str(), msg.size());
+  FileIO::logfile_append(log, msg.c_str(), msg.length());
   DumpObject(log, "  ", chunk);
 }
 
@@ -503,8 +503,12 @@ void Serialiser<SerialiserMode::Writing>::EndChunk()
         m_Write->Write(padByte);
       }
 
-      RDCDEBUG("Chunk estimated at %llu bytes, actual length %llu. Added %llu bytes padding.",
-               m_ChunkMetadata.length, writtenLength, numPadBytes);
+      // only log if there's more than 128 bytes of padding
+      if(m_ChunkMetadata.length - writtenLength > 128)
+      {
+        RDCDEBUG("Chunk estimated at %llu bytes, actual length %llu. Added %llu bytes padding.",
+                 m_ChunkMetadata.length, writtenLength, numPadBytes);
+      }
     }
     else if(writtenLength > m_ChunkMetadata.length)
     {
@@ -517,7 +521,7 @@ void Serialiser<SerialiserMode::Writing>::EndChunk()
     }
     else
     {
-      RDCDEBUG("Chunk was exactly the estimate of %llu bytes.", m_ChunkMetadata.length);
+      // RDCDEBUG("Chunk was exactly the estimate of %llu bytes.", m_ChunkMetadata.length);
     }
   }
 
@@ -894,6 +898,12 @@ rdcstr DoStringise(const rdcstr &el)
 
 template <>
 rdcstr DoStringise(const rdcinflexiblestr &el)
+{
+  return el;
+}
+
+template <>
+rdcstr DoStringise(const rdcliteral &el)
 {
   return el;
 }

@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -148,6 +148,20 @@ INSTANTIATE_SERIALISE_TYPE(ResourceId);
 
 // from image_viewer.cpp
 ReplayStatus IMG_CreateReplayDevice(RDCFile *rdc, IReplayDriver **driver);
+
+template <>
+rdcstr DoStringise(const CaptureState &el)
+{
+  BEGIN_ENUM_STRINGISE(CaptureState);
+  {
+    STRINGISE_ENUM_CLASS(LoadingReplaying);
+    STRINGISE_ENUM_CLASS(ActiveReplaying);
+    STRINGISE_ENUM_CLASS(StructuredExport);
+    STRINGISE_ENUM_CLASS(BackgroundCapturing);
+    STRINGISE_ENUM_CLASS(ActiveCapturing);
+  }
+  END_ENUM_STRINGISE();
+}
 
 template <>
 rdcstr DoStringise(const RDCDriver &el)
@@ -297,6 +311,13 @@ void RenderDoc::RecreateCrashHandler()
     RDCWARN("Disabling crash handling server due to detected chrome.");
     return;
   }
+
+  // ditto edge
+  if(exename.find("msedge.exe") && GetModuleHandleA("msedge.dll"))
+  {
+    RDCWARN("Disabling crash handling server due to detected chrome.");
+    return;
+  }
 #endif
 
   m_ExHandler = new CrashHandler(m_ExHandler);
@@ -407,9 +428,7 @@ void RenderDoc::Initialise()
   {
     rdcstr capture_filename;
 
-    const char *base = "RenderDoc_app";
-    if(IsReplayApp())
-      base = "RenderDoc";
+    const rdcstr base = IsReplayApp() ? "RenderDoc" : "RenderDoc_app";
 
     FileIO::GetDefaultFiles(base, capture_filename, m_LoggingFilename, m_Target);
 
@@ -446,6 +465,11 @@ void RenderDoc::Initialise()
 #if defined(RENDERDOC_HOOK_DLSYM)
   RDCWARN("dlsym() hooking enabled!");
 #endif
+
+  if(m_RemoteIdent == 0)
+    RDCWARN("Couldn't open socket for target control");
+  else
+    RDCDEBUG("Listening for target control on %u", m_RemoteIdent);
 
   Keyboard::Init();
 
@@ -493,7 +517,7 @@ RenderDoc::~RenderDoc()
     if(m_Captures[i].retrieved)
     {
       RDCLOG("Removing remotely retrieved capture %s", m_Captures[i].path.c_str());
-      FileIO::Delete(m_Captures[i].path.c_str());
+      FileIO::Delete(m_Captures[i].path);
     }
     else
     {
@@ -1333,11 +1357,8 @@ StructuredProcessor RenderDoc::GetStructuredProcessor(RDCDriver driver)
   return it->second;
 }
 
-CaptureExporter RenderDoc::GetCaptureExporter(const char *filetype)
+CaptureExporter RenderDoc::GetCaptureExporter(const rdcstr &filetype)
 {
-  if(!filetype)
-    return NULL;
-
   auto it = m_Exporters.find(filetype);
 
   if(it == m_Exporters.end())
@@ -1346,11 +1367,8 @@ CaptureExporter RenderDoc::GetCaptureExporter(const char *filetype)
   return it->second;
 }
 
-CaptureImporter RenderDoc::GetCaptureImporter(const char *filetype)
+CaptureImporter RenderDoc::GetCaptureImporter(const rdcstr &filetype)
 {
-  if(!filetype)
-    return NULL;
-
   auto it = m_Importers.find(filetype);
 
   if(it == m_Importers.end())
@@ -1633,9 +1651,9 @@ void RenderDoc::SetCaptureOptions(const CaptureOptions &opts)
   LibraryHooks::OptionsUpdated();
 }
 
-void RenderDoc::SetCaptureFileTemplate(const char *pathtemplate)
+void RenderDoc::SetCaptureFileTemplate(const rdcstr &pathtemplate)
 {
-  if(pathtemplate == NULL || pathtemplate[0] == '\0')
+  if(pathtemplate.empty())
     return;
 
   m_CaptureFileTemplate = pathtemplate;
@@ -1896,9 +1914,23 @@ void RenderDoc::RemoveFrameCapturer(void *dev, void *wnd)
   }
 }
 
+bool RenderDoc::HasActiveFrameCapturer(RDCDriver driver) const
+{
+  for(auto cap = m_WindowFrameCapturers.begin(); cap != m_WindowFrameCapturers.end(); cap++)
+    if(cap->second.FrameCapturer->GetFrameCaptureDriver() == driver)
+      return true;
+
+  for(auto cap = m_DeviceFrameCapturers.begin(); cap != m_DeviceFrameCapturers.end(); cap++)
+    if(cap->second->GetFrameCaptureDriver() == driver)
+      return true;
+
+  return false;
+}
+
 #if ENABLED(ENABLE_UNIT_TESTS)
 
 #undef None
+#undef Always
 
 #include "catch/catch.hpp"
 

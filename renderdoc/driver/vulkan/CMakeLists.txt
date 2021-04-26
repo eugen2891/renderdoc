@@ -26,7 +26,6 @@ set(sources
     vk_info.cpp
     vk_info.h
     vk_initstate.cpp
-    vk_sparse_initstate.cpp
     vk_manager.cpp
     vk_manager.h
     vk_memory.cpp
@@ -48,6 +47,7 @@ set(sources
     official/vulkan.h
     official/vulkan_android.h
     official/vulkan_core.h
+    official/vulkan_ggp.h
     official/vulkan_ios.h
     official/vulkan_macos.h
     official/vulkan_fuchsia.h

@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -47,7 +47,18 @@ struct VulkanQuadOverdrawCallback : public VulkanDrawcallCallback
   {
     m_pDriver->SetDrawcallCB(this);
   }
-  ~VulkanQuadOverdrawCallback() { m_pDriver->SetDrawcallCB(NULL); }
+  ~VulkanQuadOverdrawCallback()
+  {
+    m_pDriver->SetDrawcallCB(NULL);
+
+    VkDevice dev = m_pDriver->GetDev();
+
+    for(auto it = m_PipelineCache.begin(); it != m_PipelineCache.end(); ++it)
+    {
+      m_pDriver->vkDestroyPipeline(dev, it->second.pipe, NULL);
+      m_pDriver->vkDestroyPipelineLayout(dev, it->second.pipeLayout, NULL);
+    }
+  }
   void PreDraw(uint32_t eid, VkCommandBuffer cmd)
   {
     if(!m_Events.contains(eid))
@@ -399,8 +410,8 @@ void VulkanDebugManager::PatchLineStripIndexBuffer(const DrawcallDescription *dr
   if(draw->flags & DrawFlags::Indexed)
   {
     GetBufferData(rs.ibuffer.buf,
-                  rs.ibuffer.offs + uint64_t(draw->indexOffset) * draw->indexByteWidth,
-                  uint64_t(draw->numIndices) * draw->indexByteWidth, indices);
+                  rs.ibuffer.offs + uint64_t(draw->indexOffset) * rs.ibuffer.bytewidth,
+                  uint64_t(draw->numIndices) * rs.ibuffer.bytewidth, indices);
 
     if(rs.ibuffer.bytewidth == 4)
       idx32 = (uint32_t *)indices.data();
@@ -413,7 +424,8 @@ void VulkanDebugManager::PatchLineStripIndexBuffer(const DrawcallDescription *dr
   // we just patch up to 32-bit since we'll be adding more indices and we might overflow 16-bit.
   rdcarray<uint32_t> patchedIndices;
 
-  ::PatchLineStripIndexBuffer(draw, idx8, idx16, idx32, patchedIndices);
+  ::PatchLineStripIndexBuffer(draw, MakePrimitiveTopology(rs.primitiveTopology, 3), idx8, idx16,
+                              idx32, patchedIndices);
 
   indexBuffer.Create(m_pDriver, m_Device, patchedIndices.size() * sizeof(uint32_t), 1,
                      GPUBuffer::eGPUBufferIBuffer);
@@ -486,18 +498,6 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
 
   VulkanCreationInfo::Image &iminfo = m_pDriver->m_CreationInfo.m_Image[texid];
 
-  // bail out if the framebuffer dimensions don't match the current framebuffer, or draws will fail.
-  // This is an order-of-operations problem, if the overlay is set when the event is changed it is
-  // refreshed before the UI layer can update the current texture.
-  {
-    const VulkanCreationInfo::Framebuffer &fb =
-        m_pDriver->m_CreationInfo.m_Framebuffer[m_pDriver->m_RenderState.GetFramebuffer()];
-
-    if(fb.width != RDCMAX(1U, iminfo.extent.width >> sub.mip) ||
-       fb.height != RDCMAX(1U, iminfo.extent.height >> sub.mip))
-      return GetResID(m_Overlay.Image);
-  }
-
   VkCommandBuffer cmd = m_pDriver->GetNextCmd();
 
   VkCommandBufferBeginInfo beginInfo = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, NULL,
@@ -508,11 +508,14 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
 
   VkMarkerRegion::Begin(StringFormat::Fmt("RenderOverlay %d", overlay), cmd);
 
-  uint32_t multiviewMask = 0;
+  uint32_t multiviewMask = m_Overlay.MultiViewMask;
+
+  if(m_pDriver->m_RenderState.renderPass != ResourceId())
   {
     const VulkanCreationInfo::RenderPass &rp =
         m_pDriver->m_CreationInfo.m_RenderPass[m_pDriver->m_RenderState.renderPass];
 
+    multiviewMask = 0;
     for(uint32_t v : rp.subpasses[m_pDriver->m_RenderState.subpass].multiviews)
       multiviewMask |= 1U << v;
   }
@@ -699,6 +702,17 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
 
     // can't create a framebuffer or renderpass for overlay image + depth as that
     // needs to match the depth texture type wherever our draw is.
+  }
+
+  // bail out if the render area is outside our image.
+  // This is an order-of-operations problem, if the overlay is set when the event is changed it is
+  // refreshed before the UI layer can update the current texture.
+  if(m_pDriver->m_RenderState.renderArea.offset.x + m_pDriver->m_RenderState.renderArea.extent.width >
+         (m_Overlay.ImageDim.width >> sub.mip) ||
+     m_pDriver->m_RenderState.renderArea.offset.y + m_pDriver->m_RenderState.renderArea.extent.height >
+         (m_Overlay.ImageDim.height >> sub.mip))
+  {
+    return GetResID(m_Overlay.Image);
   }
 
   {
@@ -905,11 +919,11 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
         {
           rs->polygonMode = VK_POLYGON_MODE_LINE;
         }
-        else if(mainDraw->topology == Topology::TriangleList ||
-                mainDraw->topology == Topology::TriangleStrip ||
-                mainDraw->topology == Topology::TriangleFan ||
-                mainDraw->topology == Topology::TriangleList_Adj ||
-                mainDraw->topology == Topology::TriangleStrip_Adj)
+        else if(prevstate.primitiveTopology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST ||
+                prevstate.primitiveTopology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP ||
+                prevstate.primitiveTopology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN ||
+                prevstate.primitiveTopology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY ||
+                prevstate.primitiveTopology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY)
         {
           // bad drivers (aka mobile) won't have non-solid fill mode, so we have to fall back to
           // manually patching the index buffer and using a line list. This doesn't work with
@@ -934,7 +948,7 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
         else
         {
           RDCWARN("Unable to draw wireframe overlay for %s topology draw via software patching",
-                  ToStr(mainDraw->topology).c_str());
+                  ToStr(prevstate.primitiveTopology).c_str());
         }
       }
 
@@ -1358,7 +1372,7 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
   }
   else if(overlay == DebugOverlay::BackfaceCull)
   {
-    float highlightCol[] = {0.0f, 1.0f, 0.0f, 0.0f};
+    float highlightCol[] = {0.0f, 0.0f, 0.0f, 0.0f};
 
     VkImageMemoryBarrier barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
                                     NULL,
@@ -1532,7 +1546,7 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
   }
   else if(overlay == DebugOverlay::Depth || overlay == DebugOverlay::Stencil)
   {
-    float highlightCol[] = {0.0f, 1.0f, 0.0f, 0.0f};
+    float highlightCol[] = {0.0f, 0.0f, 0.0f, 0.0f};
 
     VkImageMemoryBarrier barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
                                     NULL,
@@ -1880,6 +1894,14 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
 
       size_t startEvent = 0;
 
+      // this is a bit of a hack, but it's the simplest fix without refactoring the ClearBefore..
+      // overlay to copy the result off into the overlay texture (which has its own issues with
+      // alpha channels since the overlay expects to be blended). If we are selecting a new event
+      // with ClearBeforeDraw enabled then we do this here, and then later the pipeline is fetched
+      // and that triggers the bindless feedback - which will reset the state and undo our clear. If
+      // we force it to be cached here then it won't mess things up later.
+      FetchShaderFeedback(eventId);
+
       // if we're ClearBeforePass the first event will be a vkBeginRenderPass.
       // if there are any other events, we need to play up to right before them
       // so that we have all the render state set up to do
@@ -2148,68 +2170,64 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
 
       m_pDriver->ReplayLog(0, events[0], eReplay_WithoutDraw);
 
-      // declare callback struct here
-      VulkanQuadOverdrawCallback cb(m_pDriver, m_Overlay.m_QuadDescSetLayout,
-                                    m_Overlay.m_QuadDescSet, events);
-
-      m_pDriver->ReplayLog(events.front(), events.back(), eReplay_Full);
-
-      // resolve pass
       {
-        cmd = m_pDriver->GetNextCmd();
+        // declare callback struct here
+        VulkanQuadOverdrawCallback cb(m_pDriver, m_Overlay.m_QuadDescSetLayout,
+                                      m_Overlay.m_QuadDescSet, events);
 
-        vkr = vt->BeginCommandBuffer(Unwrap(cmd), &beginInfo);
-        RDCASSERTEQUAL(vkr, VK_SUCCESS);
+        m_pDriver->ReplayLog(events.front(), events.back(), eReplay_Full);
 
-        quadImBarrier.srcAccessMask = quadImBarrier.dstAccessMask;
-        quadImBarrier.oldLayout = quadImBarrier.newLayout;
+        // resolve pass
+        {
+          cmd = m_pDriver->GetNextCmd();
 
-        quadImBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+          vkr = vt->BeginCommandBuffer(Unwrap(cmd), &beginInfo);
+          RDCASSERTEQUAL(vkr, VK_SUCCESS);
 
-        // wait for writing to finish
-        DoPipelineBarrier(cmd, 1, &quadImBarrier);
+          quadImBarrier.srcAccessMask = quadImBarrier.dstAccessMask;
+          quadImBarrier.oldLayout = quadImBarrier.newLayout;
 
-        VkClearValue clearval = {};
-        VkRenderPassBeginInfo rpbegin = {
-            VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-            NULL,
-            Unwrap(m_Overlay.NoDepthRP),
-            Unwrap(m_Overlay.NoDepthFB),
-            m_pDriver->m_RenderState.renderArea,
-            1,
-            &clearval,
-        };
-        vt->CmdBeginRenderPass(Unwrap(cmd), &rpbegin, VK_SUBPASS_CONTENTS_INLINE);
+          quadImBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
-        vt->CmdBindPipeline(Unwrap(cmd), VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            Unwrap(m_Overlay.m_QuadResolvePipeline[SampleIndex(iminfo.samples)]));
-        vt->CmdBindDescriptorSets(Unwrap(cmd), VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                  Unwrap(m_Overlay.m_QuadResolvePipeLayout), 0, 1,
-                                  UnwrapPtr(m_Overlay.m_QuadDescSet), 0, NULL);
+          // wait for writing to finish
+          DoPipelineBarrier(cmd, 1, &quadImBarrier);
 
-        VkViewport viewport = {
-            0.0f, 0.0f, (float)m_Overlay.ImageDim.width, (float)m_Overlay.ImageDim.height,
-            0.0f, 1.0f};
-        vt->CmdSetViewport(Unwrap(cmd), 0, 1, &viewport);
+          VkClearValue clearval = {};
+          VkRenderPassBeginInfo rpbegin = {
+              VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+              NULL,
+              Unwrap(m_Overlay.NoDepthRP),
+              Unwrap(m_Overlay.NoDepthFB),
+              m_pDriver->m_RenderState.renderArea,
+              1,
+              &clearval,
+          };
+          vt->CmdBeginRenderPass(Unwrap(cmd), &rpbegin, VK_SUBPASS_CONTENTS_INLINE);
 
-        vt->CmdDraw(Unwrap(cmd), 4, 1, 0, 0);
-        vt->CmdEndRenderPass(Unwrap(cmd));
+          vt->CmdBindPipeline(Unwrap(cmd), VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              Unwrap(m_Overlay.m_QuadResolvePipeline[SampleIndex(iminfo.samples)]));
+          vt->CmdBindDescriptorSets(Unwrap(cmd), VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    Unwrap(m_Overlay.m_QuadResolvePipeLayout), 0, 1,
+                                    UnwrapPtr(m_Overlay.m_QuadDescSet), 0, NULL);
 
-        vkr = vt->EndCommandBuffer(Unwrap(cmd));
-        RDCASSERTEQUAL(vkr, VK_SUCCESS);
-      }
+          VkViewport viewport = {
+              0.0f, 0.0f, (float)m_Overlay.ImageDim.width, (float)m_Overlay.ImageDim.height,
+              0.0f, 1.0f};
+          vt->CmdSetViewport(Unwrap(cmd), 0, 1, &viewport);
 
-      m_pDriver->SubmitCmds();
-      m_pDriver->FlushQ();
+          vt->CmdDraw(Unwrap(cmd), 4, 1, 0, 0);
+          vt->CmdEndRenderPass(Unwrap(cmd));
 
-      m_pDriver->vkDestroyImageView(m_Device, quadImgView, NULL);
-      m_pDriver->vkDestroyImage(m_Device, quadImg, NULL);
-      m_pDriver->vkFreeMemory(m_Device, quadImgMem, NULL);
+          vkr = vt->EndCommandBuffer(Unwrap(cmd));
+          RDCASSERTEQUAL(vkr, VK_SUCCESS);
+        }
 
-      for(auto it = cb.m_PipelineCache.begin(); it != cb.m_PipelineCache.end(); ++it)
-      {
-        m_pDriver->vkDestroyPipeline(m_Device, it->second.pipe, NULL);
-        m_pDriver->vkDestroyPipelineLayout(m_Device, it->second.pipeLayout, NULL);
+        m_pDriver->SubmitCmds();
+        m_pDriver->FlushQ();
+
+        m_pDriver->vkDestroyImageView(m_Device, quadImgView, NULL);
+        m_pDriver->vkDestroyImage(m_Device, quadImg, NULL);
+        m_pDriver->vkFreeMemory(m_Device, quadImgMem, NULL);
       }
 
       // restore back to normal
@@ -2306,7 +2324,8 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
         data->pointSpriteSize = Vec2f(0.0f, 0.0f);
         data->displayFormat = 0;
         data->rawoutput = 1;
-        data->padding = Vec3f();
+        data->flipY = 0;
+        data->padding = Vec2f();
         m_MeshRender.UBO.Unmap();
 
         uint32_t viewOffs = 0;

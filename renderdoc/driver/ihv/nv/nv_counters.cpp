@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -200,7 +200,7 @@ bool NVCounters::Init()
 
 #endif
 
-  m_NvPmLib = Process::LoadModule(dllPath.c_str());
+  m_NvPmLib = Process::LoadModule(dllPath);
   if(m_NvPmLib == NULL)
   {
     RDCWARN("NV GPU performance counters could not locate 'NvPmApi.Core.dll'");

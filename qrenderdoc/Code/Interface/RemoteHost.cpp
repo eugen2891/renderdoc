@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -125,13 +125,13 @@ void RemoteHost::CheckStatus()
     return;
   }
 
-  UpdateStatus(RENDERDOC_CheckRemoteServerConnection(m_hostname.c_str()));
+  UpdateStatus(RENDERDOC_CheckRemoteServerConnection(m_hostname));
 }
 
 ReplayStatus RemoteHost::Connect(IRemoteServer **server)
 {
   QMutexLocker autolock(&m_data->mutex);
-  return RENDERDOC_CreateRemoteServerConnection(m_hostname.c_str(), server);
+  return RENDERDOC_CreateRemoteServerConnection(m_hostname, server);
 }
 
 void RemoteHost::SetConnected(bool connected)

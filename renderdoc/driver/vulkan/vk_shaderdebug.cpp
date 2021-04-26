@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2020 Baldur Karlsson
+ * Copyright (c) 2020-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -393,7 +393,7 @@ public:
     }
 
     RDCASSERTEQUAL(data.texelSize, VarTypeByteSize(output.type) * output.columns);
-    memcpy(output.value.u64v, data.texel(coords, sample), data.texelSize);
+    memcpy(output.value.u8v.data(), data.texel(coords, sample), data.texelSize);
 
     return true;
   }
@@ -421,7 +421,7 @@ public:
     }
 
     RDCASSERTEQUAL(data.texelSize, VarTypeByteSize(value.type) * value.columns);
-    memcpy(data.texel(coords, sample), value.value.u64v, data.texelSize);
+    memcpy(data.texel(coords, sample), value.value.u8v.data(), data.texelSize);
 
     return true;
   }
@@ -612,14 +612,14 @@ public:
     {
       case rdcspv::Op::ImageQueryLevels:
       {
-        output.value.u.x = viewProps.range.levelCount;
+        output.value.u32v[0] = viewProps.range.levelCount;
         if(viewProps.range.levelCount == VK_REMAINING_MIP_LEVELS)
-          output.value.u.x = imageProps.mipLevels - viewProps.range.baseMipLevel;
+          output.value.u32v[0] = imageProps.mipLevels - viewProps.range.baseMipLevel;
         return true;
       }
       case rdcspv::Op::ImageQuerySamples:
       {
-        output.value.u.x = (uint32_t)imageProps.samples;
+        output.value.u32v[0] = (uint32_t)imageProps.samples;
         return true;
       }
       case rdcspv::Op::ImageQuerySize:
@@ -704,12 +704,12 @@ public:
     {
       const ShaderVariable &biasVar = lane.GetSrc(operands.bias);
 
-      float bias = biasVar.value.f.x;
+      float bias = biasVar.value.f32v[0];
       // silently cast parameters to 32-bit floats
       if(biasVar.type == VarType::Half)
         bias = ConvertFromHalf(biasVar.value.u16v[0]);
       else if(biasVar.type == VarType::Double)
-        bias = (float)biasVar.value.dv[0];
+        bias = (float)biasVar.value.f64v[0];
 
       if(bias != 0.0f)
       {
@@ -877,7 +877,7 @@ public:
         if(uv.type == VarType::Float)
         {
           for(int i = 0; i < coords; i++)
-            uniformParams.uvwa[i] = uv.value.fv[i];
+            uniformParams.uvwa[i] = uv.value.f32v[i];
         }
         else if(uv.type == VarType::Half)
         {
@@ -887,11 +887,11 @@ public:
         else if(uv.type == VarType::Double)
         {
           for(int i = 0; i < coords; i++)
-            uniformParams.uvwa[i] = (float)uv.value.dv[i];
+            uniformParams.uvwa[i] = (float)uv.value.f64v[i];
         }
 
         if(useCompare)
-          uniformParams.compare = compare.value.f.x;
+          uniformParams.compare = compare.value.f32v[0];
 
         constParams.gatherChannel = gatherChannel;
 
@@ -909,24 +909,24 @@ public:
           {
             if(constOffsets.members[i].type == VarType::SByte)
             {
-              constOffsets.members[i].value.i.x = constOffsets.members[i].value.s8v[0];
-              constOffsets.members[i].value.i.y = constOffsets.members[i].value.s8v[1];
+              constOffsets.members[i].value.s32v[0] = constOffsets.members[i].value.s8v[0];
+              constOffsets.members[i].value.s32v[1] = constOffsets.members[i].value.s8v[1];
             }
             else if(constOffsets.members[i].type == VarType::SShort)
             {
-              constOffsets.members[i].value.i.x = constOffsets.members[i].value.s16v[0];
-              constOffsets.members[i].value.i.y = constOffsets.members[i].value.s16v[1];
+              constOffsets.members[i].value.s32v[0] = constOffsets.members[i].value.s16v[0];
+              constOffsets.members[i].value.s32v[1] = constOffsets.members[i].value.s16v[1];
             }
           }
 
-          constParams.gatherOffsets.u0 = constOffsets.members[0].value.i.x;
-          constParams.gatherOffsets.v0 = constOffsets.members[0].value.i.y;
-          constParams.gatherOffsets.u1 = constOffsets.members[1].value.i.x;
-          constParams.gatherOffsets.v1 = constOffsets.members[1].value.i.y;
-          constParams.gatherOffsets.u2 = constOffsets.members[2].value.i.x;
-          constParams.gatherOffsets.v2 = constOffsets.members[2].value.i.y;
-          constParams.gatherOffsets.u3 = constOffsets.members[3].value.i.x;
-          constParams.gatherOffsets.v3 = constOffsets.members[3].value.i.y;
+          constParams.gatherOffsets.u0 = constOffsets.members[0].value.s32v[0];
+          constParams.gatherOffsets.v0 = constOffsets.members[0].value.s32v[1];
+          constParams.gatherOffsets.u1 = constOffsets.members[1].value.s32v[0];
+          constParams.gatherOffsets.v1 = constOffsets.members[1].value.s32v[1];
+          constParams.gatherOffsets.u2 = constOffsets.members[2].value.s32v[0];
+          constParams.gatherOffsets.v2 = constOffsets.members[2].value.s32v[1];
+          constParams.gatherOffsets.u3 = constOffsets.members[3].value.s32v[0];
+          constParams.gatherOffsets.v3 = constOffsets.members[3].value.s32v[1];
         }
 
         if(operands.flags & rdcspv::ImageOperands::ConstOffset)
@@ -937,16 +937,16 @@ public:
           for(uint8_t c = 0; c < constOffset.columns; c++)
           {
             if(constOffset.type == VarType::SByte)
-              constOffset.value.iv[c] = constOffset.value.s8v[c];
+              constOffset.value.s32v[c] = constOffset.value.s8v[c];
             else if(constOffset.type == VarType::SShort)
-              constOffset.value.iv[c] = constOffset.value.s16v[c];
+              constOffset.value.s32v[c] = constOffset.value.s16v[c];
           }
 
-          uniformParams.offset.x = constOffset.value.i.x;
+          uniformParams.offset.x = constOffset.value.s32v[0];
           if(gradCoords >= 2)
-            uniformParams.offset.y = constOffset.value.i.y;
+            uniformParams.offset.y = constOffset.value.s32v[1];
           if(gradCoords >= 3)
-            uniformParams.offset.z = constOffset.value.i.z;
+            uniformParams.offset.z = constOffset.value.s32v[2];
         }
         else if(operands.flags & rdcspv::ImageOperands::Offset)
         {
@@ -956,16 +956,16 @@ public:
           for(uint8_t c = 0; c < offset.columns; c++)
           {
             if(offset.type == VarType::SByte)
-              offset.value.iv[c] = offset.value.s8v[c];
+              offset.value.s32v[c] = offset.value.s8v[c];
             else if(offset.type == VarType::SShort)
-              offset.value.iv[c] = offset.value.s16v[c];
+              offset.value.s32v[c] = offset.value.s16v[c];
           }
 
-          uniformParams.offset.x = offset.value.i.x;
+          uniformParams.offset.x = offset.value.s32v[0];
           if(gradCoords >= 2)
-            uniformParams.offset.y = offset.value.i.y;
+            uniformParams.offset.y = offset.value.s32v[1];
           if(gradCoords >= 3)
-            uniformParams.offset.z = offset.value.i.z;
+            uniformParams.offset.z = offset.value.s32v[2];
         }
 
         break;
@@ -984,7 +984,7 @@ public:
         if(uv.type == VarType::Float)
         {
           for(int i = 0; i < coords; i++)
-            uniformParams.uvwa[i] = uv.value.fv[i];
+            uniformParams.uvwa[i] = uv.value.f32v[i];
         }
         else if(uv.type == VarType::Half)
         {
@@ -994,7 +994,7 @@ public:
         else if(uv.type == VarType::Double)
         {
           for(int i = 0; i < coords; i++)
-            uniformParams.uvwa[i] = (float)uv.value.dv[i];
+            uniformParams.uvwa[i] = (float)uv.value.f64v[i];
         }
 
         if(proj)
@@ -1005,11 +1005,11 @@ public:
 
           // do the divide ourselves rather than severely complicating the sample shader (as proj
           // variants need non-arrayed textures)
-          float q = uv.value.fv[coords];
+          float q = uv.value.f32v[coords];
           if(uv.type == VarType::Half)
             q = ConvertFromHalf(uv.value.u16v[coords]);
           else if(uv.type == VarType::Double)
-            q = (float)uv.value.dv[coords];
+            q = (float)uv.value.f64v[coords];
 
           uniformParams.uvwa[0] /= q;
           uniformParams.uvwa[1] /= q;
@@ -1020,34 +1020,34 @@ public:
         {
           const ShaderVariable &minLodVar = lane.GetSrc(operands.minLod);
 
-          uniformParams.minlod = minLodVar.value.f.x;
+          uniformParams.minlod = minLodVar.value.f32v[0];
           // silently cast parameters to 32-bit floats
           if(minLodVar.type == VarType::Half)
             uniformParams.minlod = ConvertFromHalf(minLodVar.value.u16v[0]);
           else if(minLodVar.type == VarType::Double)
-            uniformParams.minlod = (float)minLodVar.value.dv[0];
+            uniformParams.minlod = (float)minLodVar.value.f64v[0];
         }
 
         if(useCompare)
         {
-          uniformParams.compare = compare.value.f.x;
+          uniformParams.compare = compare.value.f32v[0];
           // silently cast parameters to 32-bit floats
           if(compare.type == VarType::Half)
             uniformParams.compare = ConvertFromHalf(compare.value.u16v[0]);
           else if(compare.type == VarType::Double)
-            uniformParams.compare = (float)compare.value.dv[0];
+            uniformParams.compare = (float)compare.value.f64v[0];
         }
 
         if(operands.flags & rdcspv::ImageOperands::Lod)
         {
           const ShaderVariable &lodVar = lane.GetSrc(operands.lod);
 
-          uniformParams.lod = lodVar.value.f.x;
+          uniformParams.lod = lodVar.value.f32v[0];
           // silently cast parameters to 32-bit floats
           if(lodVar.type == VarType::Half)
             uniformParams.lod = ConvertFromHalf(lodVar.value.u16v[0]);
           else if(lodVar.type == VarType::Double)
-            uniformParams.lod = (float)lodVar.value.dv[0];
+            uniformParams.lod = (float)lodVar.value.f64v[0];
           constParams.useGradOrGatherOffsets = VK_FALSE;
         }
         else if(operands.flags & rdcspv::ImageOperands::Grad)
@@ -1063,8 +1063,8 @@ public:
           {
             for(int i = 0; i < gradCoords; i++)
             {
-              uniformParams.ddx[i] = ddx.value.fv[i];
-              uniformParams.ddy[i] = ddy.value.fv[i];
+              uniformParams.ddx[i] = ddx.value.f32v[i];
+              uniformParams.ddy[i] = ddy.value.f32v[i];
             }
           }
           else if(ddx.type == VarType::Half)
@@ -1079,8 +1079,8 @@ public:
           {
             for(int i = 0; i < gradCoords; i++)
             {
-              uniformParams.ddx[i] = (float)ddx.value.dv[i];
-              uniformParams.ddy[i] = (float)ddy.value.dv[i];
+              uniformParams.ddx[i] = (float)ddx.value.f64v[i];
+              uniformParams.ddy[i] = (float)ddy.value.f64v[i];
             }
           }
         }
@@ -1097,8 +1097,8 @@ public:
           {
             for(int i = 0; i < gradCoords; i++)
             {
-              uniformParams.ddx[i] = ddxCalc.value.fv[i];
-              uniformParams.ddy[i] = ddyCalc.value.fv[i];
+              uniformParams.ddx[i] = ddxCalc.value.f32v[i];
+              uniformParams.ddy[i] = ddyCalc.value.f32v[i];
             }
           }
           else if(ddxCalc.type == VarType::Half)
@@ -1113,8 +1113,8 @@ public:
           {
             for(int i = 0; i < gradCoords; i++)
             {
-              uniformParams.ddx[i] = (float)ddxCalc.value.dv[i];
-              uniformParams.ddy[i] = (float)ddyCalc.value.dv[i];
+              uniformParams.ddx[i] = (float)ddxCalc.value.f64v[i];
+              uniformParams.ddy[i] = (float)ddyCalc.value.f64v[i];
             }
           }
         }
@@ -1127,16 +1127,16 @@ public:
           for(uint8_t c = 0; c < constOffset.columns; c++)
           {
             if(constOffset.type == VarType::SByte)
-              constOffset.value.iv[c] = constOffset.value.s8v[c];
+              constOffset.value.s32v[c] = constOffset.value.s8v[c];
             else if(constOffset.type == VarType::SShort)
-              constOffset.value.iv[c] = constOffset.value.s16v[c];
+              constOffset.value.s32v[c] = constOffset.value.s16v[c];
           }
 
-          uniformParams.offset.x = constOffset.value.i.x;
+          uniformParams.offset.x = constOffset.value.s32v[0];
           if(gradCoords >= 2)
-            uniformParams.offset.y = constOffset.value.i.y;
+            uniformParams.offset.y = constOffset.value.s32v[1];
           if(gradCoords >= 3)
-            uniformParams.offset.z = constOffset.value.i.z;
+            uniformParams.offset.z = constOffset.value.s32v[2];
         }
         else if(operands.flags & rdcspv::ImageOperands::Offset)
         {
@@ -1146,16 +1146,16 @@ public:
           for(uint8_t c = 0; c < offset.columns; c++)
           {
             if(offset.type == VarType::SByte)
-              offset.value.iv[c] = offset.value.s8v[c];
+              offset.value.s32v[c] = offset.value.s8v[c];
             else if(offset.type == VarType::SShort)
-              offset.value.iv[c] = offset.value.s16v[c];
+              offset.value.s32v[c] = offset.value.s16v[c];
           }
 
-          uniformParams.offset.x = offset.value.i.x;
+          uniformParams.offset.x = offset.value.s32v[0];
           if(gradCoords >= 2)
-            uniformParams.offset.y = offset.value.i.y;
+            uniformParams.offset.y = offset.value.s32v[1];
           if(gradCoords >= 3)
-            uniformParams.offset.z = offset.value.i.z;
+            uniformParams.offset.z = offset.value.s32v[2];
         }
 
         break;
@@ -1320,11 +1320,11 @@ public:
     else if(output.type == VarType::Double)
     {
       for(uint8_t c = 0; c < 4; c++)
-        output.value.dv[c] = ret[c];
+        output.value.f64v[c] = ret[c];
     }
     else
     {
-      memcpy(output.value.uv, ret, sizeof(Vec4f));
+      memcpy(output.value.u32v.data(), ret, sizeof(Vec4f));
     }
 
     m_DebugData.ReadbackBuffer.Unmap();
@@ -1395,7 +1395,7 @@ public:
       {
         RDCASSERTEQUAL(params[i].type, params[0].type);
         double p[4] = {};
-        memcpy(p, params[i].value.fv, VarTypeByteSize(params[i].type) * params[i].columns);
+        memcpy(p, params[i].value.f32v.data(), VarTypeByteSize(params[i].type) * params[i].columns);
         ObjDisp(cmd)->CmdPushConstants(Unwrap(cmd), Unwrap(m_DebugData.PipeLayout),
                                        VK_SHADER_STAGE_ALL, uint32_t(sizeof(p) * i), sizeof(p), p);
       }
@@ -1445,7 +1445,7 @@ public:
     if(op == rdcspv::GLSLstd450::Length || op == rdcspv::GLSLstd450::Distance)
       output.columns = 1;
 
-    memcpy(output.value.uv, ret, VarTypeByteSize(output.type) * output.columns);
+    memcpy(output.value.u32v.data(), ret, VarTypeByteSize(output.type) * output.columns);
 
     m_DebugData.ReadbackBuffer.Unmap();
 
@@ -2858,8 +2858,8 @@ static void CreatePSInputFetcher(rdcarray<uint32_t> &fragspv, uint32_t &structSt
     }
 
     // remove any OpName that refers to deleted IDs - functions or results
-    it = editor.Begin(rdcspv::Section::Debug);
-    end = editor.End(rdcspv::Section::Debug);
+    it = editor.Begin(rdcspv::Section::DebugNames);
+    end = editor.End(rdcspv::Section::DebugNames);
     while(it < end)
     {
       if(it.opcode() == rdcspv::Op::Name)
@@ -2922,7 +2922,7 @@ static void CreatePSInputFetcher(rdcarray<uint32_t> &fragspv, uint32_t &structSt
   rdcspv::Id entryID;
   for(const rdcspv::EntryPoint &e : editor.GetEntries())
   {
-    if(e.name == shadRefl.entryPoint)
+    if(e.name == shadRefl.entryPoint && e.executionModel == rdcspv::ExecutionModel::Fragment)
     {
       entryID = e.id;
       break;
@@ -3334,7 +3334,6 @@ static void CreatePSInputFetcher(rdcarray<uint32_t> &fragspv, uint32_t &structSt
 
     // add capabilities
     editor.AddCapability(rdcspv::Capability::PhysicalStorageBufferAddresses);
-    editor.AddCapability(rdcspv::Capability::Int64);
 
     // declare the address constant which we will specialise later. There is a chicken-and-egg where
     // this function determines how big the buffer needs to be so instead of hardcoding the address
@@ -3353,6 +3352,8 @@ static void CreatePSInputFetcher(rdcarray<uint32_t> &fragspv, uint32_t &structSt
     }
     else
     {
+      editor.AddCapability(rdcspv::Capability::Int64);
+
       addressConstant =
           editor.AddSpecConstantImmediate<uint64_t>(0ULL, (uint32_t)InputSpecConstant::Address);
     }
@@ -3869,7 +3870,7 @@ ShaderDebugTrace *VulkanReplay::DebugVertex(uint32_t eventId, uint32_t vertid, u
           var.type = VarType::Float;
 
           RDCASSERTEQUAL(fmt.compByteWidth, VarTypeByteSize(var.type));
-          memcpy(var.value.u64v, data.data(), fmt.compByteWidth * fmt.compCount);
+          memcpy(var.value.u8v.data(), data.data(), fmt.compByteWidth * fmt.compCount);
         }
       }
       else
@@ -3964,7 +3965,8 @@ ShaderDebugTrace *VulkanReplay::DebugPixel(uint32_t eventId, uint32_t x, uint32_
   std::map<ShaderBuiltin, ShaderVariable> &builtins = apiWrapper->builtin_inputs;
   builtins[ShaderBuiltin::DeviceIndex] = ShaderVariable(rdcstr(), 0U, 0U, 0U, 0U);
   builtins[ShaderBuiltin::DrawIndex] = ShaderVariable(rdcstr(), draw->drawIndex, 0U, 0U, 0U);
-  builtins[ShaderBuiltin::Position] = ShaderVariable(rdcstr(), x, y, 0U, 0U);
+  builtins[ShaderBuiltin::Position] =
+      ShaderVariable(rdcstr(), float(x) + 0.5f, float(y) + 0.5f, 0.0f, 0.0f);
 
   // If the pipe contains a geometry shader, then Primitive ID cannot be used in the pixel
   // shader without being emitted from the geometry shader. For now, check if this semantic
@@ -4298,7 +4300,8 @@ ShaderDebugTrace *VulkanReplay::DebugPixel(uint32_t eventId, uint32_t x, uint32_
   // buffer, we'd still want to spec-constant the address when possible so we're always going to
   // have some varying value.
   VkPipeline inputsPipe;
-  vkr = m_pDriver->vkCreateGraphicsPipelines(dev, NULL, 1, &graphicsInfo, NULL, &inputsPipe);
+  vkr =
+      m_pDriver->vkCreateGraphicsPipelines(dev, VK_NULL_HANDLE, 1, &graphicsInfo, NULL, &inputsPipe);
   RDCASSERTEQUAL(vkr, VK_SUCCESS);
 
   // make copy of state to draw from
@@ -4531,11 +4534,11 @@ ShaderDebugTrace *VulkanReplay::DebugPixel(uint32_t eventId, uint32_t x, uint32_
 
       const size_t sz = elemSize * param.compCount;
 
-      memcpy(((byte *)var.value.u64v) + elemSize * comp, value + i * paramAlign, sz);
-      memcpy(((byte *)deriv.ddxcoarse.value.u64v) + elemSize * comp, ddxcoarse + i * paramAlign, sz);
-      memcpy(((byte *)deriv.ddycoarse.value.u64v) + elemSize * comp, ddycoarse + i * paramAlign, sz);
-      memcpy(((byte *)deriv.ddxfine.value.u64v) + elemSize * comp, ddxfine + i * paramAlign, sz);
-      memcpy(((byte *)deriv.ddyfine.value.u64v) + elemSize * comp, ddyfine + i * paramAlign, sz);
+      memcpy((var.value.u8v.data()) + elemSize * comp, value + i * paramAlign, sz);
+      memcpy((deriv.ddxcoarse.value.u8v.data()) + elemSize * comp, ddxcoarse + i * paramAlign, sz);
+      memcpy((deriv.ddycoarse.value.u8v.data()) + elemSize * comp, ddycoarse + i * paramAlign, sz);
+      memcpy((deriv.ddxfine.value.u8v.data()) + elemSize * comp, ddxfine + i * paramAlign, sz);
+      memcpy((deriv.ddyfine.value.u8v.data()) + elemSize * comp, ddyfine + i * paramAlign, sz);
     }
 
     ret = debugger->BeginDebug(apiWrapper, ShaderStage::Pixel, entryPoint, spec,
@@ -4576,8 +4579,9 @@ ShaderDebugTrace *VulkanReplay::DebugPixel(uint32_t eventId, uint32_t x, uint32_
   return ret;
 }
 
-ShaderDebugTrace *VulkanReplay::DebugThread(uint32_t eventId, const uint32_t groupid[3],
-                                            const uint32_t threadid[3])
+ShaderDebugTrace *VulkanReplay::DebugThread(uint32_t eventId,
+                                            const rdcfixedarray<uint32_t, 3> &groupid,
+                                            const rdcfixedarray<uint32_t, 3> &threadid)
 {
   if(!GetAPIProperties().shaderDebugging)
   {

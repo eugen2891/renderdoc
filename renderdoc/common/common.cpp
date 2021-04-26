@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -265,13 +265,13 @@ void rdclog_filename(const char *filename)
   if(filename && filename[0])
     *logfile = filename;
 
-  FileIO::logfile_close(logfileHandle, NULL);
+  FileIO::logfile_close(logfileHandle, rdcstr());
 
   logfileHandle = NULL;
 
   if(!logfile->empty())
   {
-    logfileHandle = FileIO::logfile_open(logfile->c_str());
+    logfileHandle = FileIO::logfile_open(*logfile);
 
     if(logfileHandle && previous.c_str())
     {
@@ -279,9 +279,9 @@ void rdclog_filename(const char *filename)
       FileIO::ReadAll(previous, previousContents);
 
       if(!previousContents.empty())
-        FileIO::logfile_append(logfileHandle, previousContents.c_str(), previousContents.size());
+        FileIO::logfile_append(logfileHandle, previousContents.c_str(), previousContents.length());
 
-      FileIO::Delete(previous.c_str());
+      FileIO::Delete(previous);
     }
   }
 }
@@ -296,7 +296,7 @@ void rdclog_enableoutput()
 void rdclog_closelog()
 {
   log_output_enabled = false;
-  FileIO::logfile_close(logfileHandle, logfile->c_str());
+  FileIO::logfile_close(logfileHandle, *logfile);
 }
 
 void rdclog_flush()

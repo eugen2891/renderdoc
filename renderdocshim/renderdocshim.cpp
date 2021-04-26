@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2014-2020 Baldur Karlsson
+ * Copyright (c) 2014-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -37,7 +37,7 @@
 struct CaptureOptions;
 typedef void(__cdecl *pINTERNAL_SetCaptureOptions)(const CaptureOptions *opts);
 typedef void(__cdecl *pINTERNAL_SetLogFile)(const char *logfile);
-typedef void(__cdecl *pRENDERDOC_SetDebugLogFile)(const char *logfile);
+typedef void(__cdecl *pINTERNAL_SetDebugLogFile)(const char *logfile);
 
 #if defined(RELEASE)
 #define LOGPRINT(txt) \
@@ -118,8 +118,8 @@ void CheckHook()
             (pINTERNAL_SetCaptureOptions)GetProcAddress(mod, "INTERNAL_SetCaptureOptions");
         pINTERNAL_SetLogFile setlogfile =
             (pINTERNAL_SetLogFile)GetProcAddress(mod, "INTERNAL_SetLogFile");
-        pRENDERDOC_SetDebugLogFile setdebuglog =
-            (pRENDERDOC_SetDebugLogFile)GetProcAddress(mod, "RENDERDOC_SetDebugLogFile");
+        pINTERNAL_SetDebugLogFile setdebuglog =
+            (pINTERNAL_SetDebugLogFile)GetProcAddress(mod, "INTERNAL_SetDebugLogFile");
 
         if(setopts)
           setopts((const CaptureOptions *)data->opts);

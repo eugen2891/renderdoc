@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -84,10 +84,11 @@ public:
 
   // IBufferViewer
   QWidget *Widget() override { return this; }
-  void ScrollToRow(int row, MeshDataStage stage = MeshDataStage::VSIn) override;
-  void ScrollToColumn(int column, MeshDataStage stage = MeshDataStage::VSIn) override;
-  void SetCurrentInstance(int instance) override;
-  void SetCurrentView(int view) override;
+  void ScrollToRow(int32_t row, MeshDataStage stage = MeshDataStage::VSIn) override;
+  void ScrollToColumn(int32_t column, MeshDataStage stage = MeshDataStage::VSIn) override;
+  void SetCurrentInstance(int32_t instance) override;
+  void SetCurrentView(int32_t view) override;
+  void SetPreviewStage(MeshDataStage stage) override;
 
   // ICaptureViewer
   void OnCaptureLoaded() override;

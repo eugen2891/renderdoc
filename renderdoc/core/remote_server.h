@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -57,21 +57,22 @@ public:
 
   virtual rdcstr GetHomeFolder();
 
-  virtual rdcarray<PathEntry> ListFolder(const char *path);
+  virtual rdcarray<PathEntry> ListFolder(const rdcstr &path);
 
-  virtual ExecuteResult ExecuteAndInject(const char *a, const char *w, const char *c,
+  virtual ExecuteResult ExecuteAndInject(const rdcstr &app, const rdcstr &workingDir,
+                                         const rdcstr &cmdline,
                                          const rdcarray<EnvironmentModification> &env,
                                          const CaptureOptions &opts);
 
-  virtual void CopyCaptureFromRemote(const char *remotepath, const char *localpath,
+  virtual void CopyCaptureFromRemote(const rdcstr &remotepath, const rdcstr &localpath,
                                      RENDERDOC_ProgressCallback progress);
 
-  virtual rdcstr CopyCaptureToRemote(const char *filename, RENDERDOC_ProgressCallback progress);
+  virtual rdcstr CopyCaptureToRemote(const rdcstr &filename, RENDERDOC_ProgressCallback progress);
 
-  virtual void TakeOwnershipCapture(const char *filename);
+  virtual void TakeOwnershipCapture(const rdcstr &filename);
 
   virtual rdcpair<ReplayStatus, IReplayController *> OpenCapture(uint32_t proxyid,
-                                                                 const char *filename,
+                                                                 const rdcstr &filename,
                                                                  const ReplayOptions &opts,
                                                                  RENDERDOC_ProgressCallback progress);
 
@@ -81,15 +82,15 @@ public:
 
   virtual rdcarray<GPUDevice> GetAvailableGPUs();
 
-  virtual int GetSectionCount();
+  virtual int32_t GetSectionCount();
 
-  virtual int FindSectionByName(const char *name);
+  virtual int32_t FindSectionByName(const rdcstr &name);
 
-  virtual int FindSectionByType(SectionType sectionType);
+  virtual int32_t FindSectionByType(SectionType sectionType);
 
-  virtual SectionProperties GetSectionProperties(int index);
+  virtual SectionProperties GetSectionProperties(int32_t index);
 
-  virtual bytebuf GetSectionContents(int index);
+  virtual bytebuf GetSectionContents(int32_t index);
 
   virtual bool WriteSection(const SectionProperties &props, const bytebuf &contents);
 

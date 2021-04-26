@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -121,8 +121,7 @@ rdcarray<uint32_t> GLReplay::GetPassEvents(uint32_t eventId)
   {
     const DrawcallDescription *prev = start->previous;
 
-    if(memcmp(start->outputs, prev->outputs, sizeof(start->outputs)) != 0 ||
-       start->depthOut != prev->depthOut)
+    if(start->outputs != prev->outputs || start->depthOut != prev->depthOut)
       break;
 
     start = prev;
@@ -774,8 +773,7 @@ rdcstr GLReplay::DisassembleShader(ResourceId pipeline, const ShaderReflection *
     rdcstr &disasm = shaderDetails.disassembly;
 
     if(disasm.empty())
-      disasm = shaderDetails.spirv.Disassemble(refl->entryPoint.c_str(),
-                                               shaderDetails.spirvInstructionLines);
+      disasm = shaderDetails.spirv.Disassemble(refl->entryPoint, shaderDetails.spirvInstructionLines);
 
     return disasm;
   }
@@ -806,10 +804,16 @@ void GLReplay::SavePipelineState(uint32_t eventId)
   drv.glGetIntegerv(eGL_ELEMENT_ARRAY_BUFFER_BINDING, (GLint *)&ibuffer);
   pipe.vertexInput.indexBuffer = rm->GetOriginalID(rm->GetResID(BufferRes(ctx, ibuffer)));
 
-  pipe.vertexInput.primitiveRestart = rs.Enabled[GLRenderState::eEnabled_PrimitiveRestart];
+  pipe.vertexInput.primitiveRestart = rs.Enabled[GLRenderState::eEnabled_PrimitiveRestart] ||
+                                      rs.Enabled[GLRenderState::eEnabled_PrimitiveRestartFixedIndex];
   pipe.vertexInput.restartIndex = rs.Enabled[GLRenderState::eEnabled_PrimitiveRestartFixedIndex]
                                       ? ~0U
                                       : rs.PrimitiveRestartIndex;
+
+  const GLDrawParams &drawParams = m_pDriver->GetDrawcallParameters(eventId);
+
+  pipe.vertexInput.indexByteStride = drawParams.indexWidth;
+  pipe.vertexInput.topology = drawParams.topo;
 
   // Vertex buffers and attributes
   GLint numVBufferBindings = 16;
@@ -856,7 +860,7 @@ void GLReplay::SavePipelineState(uint32_t eventId)
 
     RDCEraseEl(pipe.vertexInput.attributes[i].genericValue);
     drv.glGetVertexAttribfv(i, eGL_CURRENT_VERTEX_ATTRIB,
-                            pipe.vertexInput.attributes[i].genericValue.floatValue);
+                            (GLfloat *)pipe.vertexInput.attributes[i].genericValue.floatValue.data());
 
     ResourceFormat fmt;
 
@@ -969,10 +973,8 @@ void GLReplay::SavePipelineState(uint32_t eventId)
 
   pipe.vertexInput.provokingVertexLast = (rs.ProvokingVertex != eGL_FIRST_VERTEX_CONVENTION);
 
-  memcpy(pipe.vertexProcessing.defaultInnerLevel, rs.PatchParams.defaultInnerLevel,
-         sizeof(rs.PatchParams.defaultInnerLevel));
-  memcpy(pipe.vertexProcessing.defaultOuterLevel, rs.PatchParams.defaultOuterLevel,
-         sizeof(rs.PatchParams.defaultOuterLevel));
+  pipe.vertexProcessing.defaultInnerLevel = rs.PatchParams.defaultInnerLevel;
+  pipe.vertexProcessing.defaultOuterLevel = rs.PatchParams.defaultOuterLevel;
 
   pipe.vertexProcessing.discard = rs.Enabled[GLRenderState::eEnabled_RasterizerDiscard];
   pipe.vertexProcessing.clipOriginLowerLeft = (rs.ClipOrigin != eGL_UPPER_LEFT);
@@ -1355,10 +1357,10 @@ void GLReplay::SavePipelineState(uint32_t eventId)
         {
           if(samp != 0)
             drv.glGetSamplerParameterfv(samp, eGL_TEXTURE_BORDER_COLOR,
-                                        &pipe.samplers[unit].borderColor[0]);
+                                        pipe.samplers[unit].borderColor.data());
           else
             drv.glGetTextureParameterfvEXT(tex, target, eGL_TEXTURE_BORDER_COLOR,
-                                           &pipe.samplers[unit].borderColor[0]);
+                                           pipe.samplers[unit].borderColor.data());
 
           GLint v;
           v = 0;
@@ -1964,7 +1966,7 @@ void GLReplay::SavePipelineState(uint32_t eventId)
       pipe.framebuffer.drawFBO.readBuffer = -1;
   }
 
-  memcpy(pipe.framebuffer.blendState.blendFactor, rs.BlendColor, sizeof(rs.BlendColor));
+  pipe.framebuffer.blendState.blendFactor = rs.BlendColor;
 
   pipe.framebuffer.framebufferSRGB = rs.Enabled[GLRenderState::eEnabled_FramebufferSRGB];
   pipe.framebuffer.dither = rs.Enabled[GLRenderState::eEnabled_Dither];
@@ -2057,7 +2059,7 @@ void GLReplay::OpenGLFillCBufferVariables(ResourceId shader, GLuint prog, bool b
 
   for(int32_t i = 0; i < variables.count(); i++)
   {
-    const ShaderVariableDescriptor &desc = variables[i].type.descriptor;
+    const ShaderConstantDescriptor &desc = variables[i].type.descriptor;
 
     // remove implicit '.' for recursing through "structs" if it's actually a multi-dimensional
     // array.
@@ -2660,6 +2662,43 @@ void GLReplay::GetTextureData(ResourceId tex, const Subresource &sub,
   {
     MakeCurrentReplayContext(m_DebugCtx);
 
+    if(texType == eGL_RENDERBUFFER)
+    {
+      // do blit from renderbuffer to texture
+      MakeCurrentReplayContext(&m_ReplayCtx);
+
+      GLuint curDrawFBO = 0;
+      GLuint curReadFBO = 0;
+      drv.glGetIntegerv(eGL_DRAW_FRAMEBUFFER_BINDING, (GLint *)&curDrawFBO);
+      drv.glGetIntegerv(eGL_READ_FRAMEBUFFER_BINDING, (GLint *)&curReadFBO);
+
+      drv.glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, texDetails.renderbufferFBOs[1]);
+      drv.glBindFramebuffer(eGL_READ_FRAMEBUFFER, texDetails.renderbufferFBOs[0]);
+
+      GLenum b = GetBaseFormat(texDetails.internalFormat);
+
+      GLbitfield mask = GL_COLOR_BUFFER_BIT;
+
+      if(b == eGL_DEPTH_COMPONENT)
+        mask = GL_DEPTH_BUFFER_BIT;
+      else if(b == eGL_STENCIL)
+        mask = GL_STENCIL_BUFFER_BIT;
+      else if(b == eGL_DEPTH_STENCIL)
+        mask = GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT;
+
+      SafeBlitFramebuffer(0, 0, texDetails.width, texDetails.height, 0, 0, texDetails.width,
+                          texDetails.height, mask, eGL_NEAREST);
+
+      drv.glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, curDrawFBO);
+      drv.glBindFramebuffer(eGL_READ_FRAMEBUFFER, curReadFBO);
+
+      // then proceed to read from the texture
+      texname = texDetails.renderbufferReadTex;
+      texType = texDetails.samples > 1 ? eGL_TEXTURE_2D_MULTISAMPLE : eGL_TEXTURE_2D;
+
+      MakeCurrentReplayContext(m_DebugCtx);
+    }
+
     // copy multisampled texture to an array. This creates tempTex and returns it in that variable,
     // for us to own
     tempTex = 0;
@@ -2721,7 +2760,7 @@ void GLReplay::GetTextureData(ResourceId tex, const Subresource &sub,
 
       // then proceed to read from the texture
       texname = texDetails.renderbufferReadTex;
-      texType = eGL_TEXTURE_2D;
+      texType = texDetails.samples > 1 ? eGL_TEXTURE_2D_MULTISAMPLE : eGL_TEXTURE_2D;
 
       MakeCurrentReplayContext(m_DebugCtx);
     }
@@ -3674,8 +3713,8 @@ ShaderDebugTrace *GLReplay::DebugPixel(uint32_t eventId, uint32_t x, uint32_t y,
   return new ShaderDebugTrace();
 }
 
-ShaderDebugTrace *GLReplay::DebugThread(uint32_t eventId, const uint32_t groupid[3],
-                                        const uint32_t threadid[3])
+ShaderDebugTrace *GLReplay::DebugThread(uint32_t eventId, const rdcfixedarray<uint32_t, 3> &groupid,
+                                        const rdcfixedarray<uint32_t, 3> &threadid)
 {
   GLNOTIMP("DebugThread");
   return new ShaderDebugTrace();

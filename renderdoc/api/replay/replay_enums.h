@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -98,6 +98,12 @@ version of RenderDoc that addes a new section type. They should be considered eq
   This section contains any edited shaders.
 
   The name for this section will be "renderdoc/ui/edits".
+
+.. data:: D3D12Core
+
+  This section contains an internal copy of D3D12Core for replaying.
+
+  The name for this section will be "renderdoc/internal/d3d12core".
 )");
 enum class SectionType : uint32_t
 {
@@ -112,6 +118,7 @@ enum class SectionType : uint32_t
   ExtendedThumbnail,
   EmbeddedLogfile,
   EditedShaders,
+  D3D12Core,
   Count,
 };
 
@@ -469,7 +476,29 @@ enum class AddressMode : uint32_t
 
 DECLARE_REFLECTION_ENUM(AddressMode);
 
-enum YcbcrConversion
+DOCUMENT(R"(The color model conversion that a YCbCr sampler uses to convert from YCbCr to RGB.
+
+.. data:: Raw
+
+  The input values are not converted at all.
+
+.. data:: RangeOnly
+
+  There is no model conversion but the inputs are range expanded as for YCbCr.
+
+.. data:: BT709
+
+  The conversion uses the BT.709 color model conversion.
+
+.. data:: BT601
+
+  The conversion uses the BT.601 color model conversion.
+
+.. data:: BT2020
+
+  The conversion uses the BT.2020 color model conversion.
+)");
+enum class YcbcrConversion
 {
   Raw,
   RangeOnly,
@@ -480,7 +509,18 @@ enum YcbcrConversion
 
 DECLARE_REFLECTION_ENUM(YcbcrConversion);
 
-enum YcbcrRange
+DOCUMENT(R"(Specifies the range of encoded values and their interpretation.
+
+.. data:: ITUFull
+
+  The full range of input values are valid and interpreted according to ITU "full range" rules.
+
+.. data:: ITUNarrow
+
+  A head and foot are reserved in the encoded values, and the remaining values are expanded
+  according to "narrow range" rules.
+)");
+enum class YcbcrRange
 {
   ITUFull,
   ITUNarrow,
@@ -488,7 +528,18 @@ enum YcbcrRange
 
 DECLARE_REFLECTION_ENUM(YcbcrRange);
 
-enum ChromaSampleLocation
+DOCUMENT(R"(Determines where in the pixel downsampled chrome samples are positioned.
+
+.. data:: CositedEven
+
+  The chroma samples are positioned exactly in the same place as the even luma co-ordinates.
+
+.. data:: Midpoint
+
+  The chrome samples are positioned half way between each even luma sample and the next highest odd
+  luma sample.
+)");
+enum class ChromaSampleLocation
 {
   CositedEven,
   Midpoint,
@@ -1691,6 +1742,7 @@ DOCUMENT(R"(Check if an API is D3D or not
 
 :param GraphicsAPI api: The graphics API in question
 :return: ``True`` if api is a D3D-based API, ``False`` otherwise
+:rtype: bool
 )");
 constexpr inline bool IsD3D(GraphicsAPI api)
 {
@@ -1741,9 +1793,9 @@ DECLARE_REFLECTION_ENUM(ShaderEncoding);
 
 DOCUMENT(R"(Check whether or not this is a human readable text representation.
 
-:param ShaderEncoding e: The encoding to check.
+:param ShaderEncoding encoding: The encoding to check.
 :return: ``True`` if it describes a text representation, ``False`` for a bytecode representation.
-:rtype: ``bool``
+:rtype: bool
 )");
 constexpr inline bool IsTextRepresentation(ShaderEncoding encoding)
 {
@@ -2003,9 +2055,9 @@ DOCUMENT(R"(Return the number of control points in a patch list ``Topology``
 
 ``t`` must be a patch list topology, the return value will be between 1 and 32 inclusive
 
-:param Topology t: The patch list topology
+:param Topology topology: The patch list topology
 :return: The number of control points in the specified topology
-:rtype: ``int``
+:rtype: int
 )");
 constexpr inline uint32_t PatchList_Count(Topology topology)
 {
@@ -2019,9 +2071,9 @@ DOCUMENT(R"(Check whether or not this topology supports primitive restart.
 .. note:: This is almost but not quite the same as being a line/triangle strip - triangle fans
   also support restart. See also :func:`IsStrip`.
 
-:param Topology t: The topology to check.
+:param Topology topology: The topology to check.
 :return: ``True`` if it describes a topology that allows restart, ``False`` for a list.
-:rtype: ``bool``
+:rtype: bool
 )");
 constexpr inline bool SupportsRestart(Topology topology)
 {
@@ -2032,9 +2084,9 @@ constexpr inline bool SupportsRestart(Topology topology)
 
 DOCUMENT(R"(Check whether or not this is a strip-type topology.
 
-:param Topology t: The topology to check.
+:param Topology topology: The topology to check.
 :return: ``True`` if it describes a strip topology, ``False`` for a list.
-:rtype: ``bool``
+:rtype: bool
 )");
 constexpr inline bool IsStrip(Topology topology)
 {
@@ -2664,6 +2716,50 @@ enum class ConservativeRaster : uint32_t
 
 DECLARE_REFLECTION_ENUM(ConservativeRaster);
 
+DOCUMENT(R"(A combiner to apply when determining a pixel shading rate.
+
+.. data:: Keep
+
+  Keep the first input to the combiner.
+
+.. data:: Passthrough
+
+  Keep the first input to the combiner. Alias for :data:`Keep`, for D3D terminology.
+
+.. data:: Replace
+
+  Replace with the second input to the combiner.
+
+.. data:: Override
+
+  Replace with the second input to the combiner. Alias for :data:`Replace`, for D3D terminology.
+
+.. data:: Min
+
+  Use the minimum (finest rate) of the two inputs.
+
+.. data:: Max
+
+  Use the maximum (coarsest rate) of the two inputs.
+
+.. data:: Multiply
+
+  Multiply the two rates together (e.g. 1x1 and 1x2 = 1x2, 2x2 and 2x2 = 4x4). Note that D3D names
+  this 'sum' misleadingly.
+)");
+enum class ShadingRateCombiner : uint32_t
+{
+  Keep,
+  Passthrough = Keep,
+  Replace,
+  Override = Replace,
+  Min,
+  Max,
+  Multiply,
+};
+
+DECLARE_REFLECTION_ENUM(ShadingRateCombiner);
+
 DOCUMENT(R"(The line rasterization mode.
 
 .. data:: Default
@@ -3253,7 +3349,7 @@ DOCUMENT(R"(Check whether or not this is a Generic counter.
 
 :param GPUCounter c: The counter.
 :return: ``True`` if it is a generic counter, ``False`` if it's not.
-:rtype: ``bool``
+:rtype: bool
 )");
 inline constexpr bool IsGenericCounter(GPUCounter c)
 {
@@ -3264,7 +3360,7 @@ DOCUMENT(R"(Check whether or not this is an AMD private counter.
 
 :param GPUCounter c: The counter.
 :return: ``True`` if it is an AMD private counter, ``False`` if it's not.
-:rtype: ``bool``
+:rtype: bool
 )");
 inline constexpr bool IsAMDCounter(GPUCounter c)
 {
@@ -3275,7 +3371,7 @@ DOCUMENT(R"(Check whether or not this is an Intel private counter.
 
 :param GPUCounter c: The counter.
 :return: ``True`` if it is an Intel private counter, ``False`` if it's not.
-:rtype: ``bool``
+:rtype: bool
 )");
 inline constexpr bool IsIntelCounter(GPUCounter c)
 {
@@ -3286,7 +3382,7 @@ DOCUMENT(R"(Check whether or not this is an Nvidia private counter.
 
 :param GPUCounter c: The counter.
 :return: ``True`` if it is an Nvidia private counter, ``False`` if it's not.
-:rtype: ``bool``
+:rtype: bool
 )");
 inline constexpr bool IsNvidiaCounter(GPUCounter c)
 {
@@ -3297,7 +3393,7 @@ DOCUMENT(R"(Check whether or not this is a KHR counter.
 
 :param GPUCounter c: The counter.
 :return: ``True`` if it is a Vulkan counter reported through the VK_KHR_performance_query extension, ``False`` if it's not.
-:rtype: ``bool``
+:rtype: bool
 )");
 inline constexpr bool IsVulkanExtendedCounter(GPUCounter c)
 {
@@ -3308,7 +3404,7 @@ DOCUMENT(R"(Check whether or not this is an ARM private counter.
 
 :param GPUCounter c: The counter.
 :return: ``True`` if it is an ARM private counter, ``False`` if it's not.
-:rtype: ``bool``
+:rtype: bool
 )");
 inline constexpr bool IsARMCounter(GPUCounter c)
 {
@@ -4197,7 +4293,8 @@ enum class DrawFlags : uint32_t
 BITMASK_OPERATORS(DrawFlags);
 DECLARE_REFLECTION_ENUM(DrawFlags);
 
-DOCUMENT(R"(A set of flags giving details of the current status of vulkan layer registration.
+DOCUMENT(R"(INTERNAL: A set of flags giving details of the current status of vulkan layer
+registration.
 
 .. data:: NoFlags
 
@@ -4262,7 +4359,7 @@ enum class VulkanLayerFlags : uint32_t
 BITMASK_OPERATORS(VulkanLayerFlags);
 DECLARE_REFLECTION_ENUM(VulkanLayerFlags);
 
-DOCUMENT(R"(A set of flags giving details of the current status of Android tracability.
+DOCUMENT(R"(INTERNAL: A set of flags giving details of the current status of Android tracability.
 
 .. data:: NoFlags
 

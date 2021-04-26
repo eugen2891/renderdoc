@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -1030,7 +1030,8 @@ void WrappedOpenGL::DeleteContext(void *contextHandle)
 
   RDCLOG("Deleting context %p", contextHandle);
 
-  RenderDoc::Inst().RemoveDeviceFrameCapturer(ctxdata.ctx);
+  if(ctxdata.Modern())
+    RenderDoc::Inst().RemoveDeviceFrameCapturer(ctxdata.ctx);
 
   // delete the context
   GetResourceManager()->DeleteContext(contextHandle);
@@ -1161,7 +1162,8 @@ void WrappedOpenGL::CreateContext(GLWindowingData winData, void *shareContext,
     RDCLOG("Reusing old sharegroup %p", ctxdata.shareGroup);
   }
 
-  RenderDoc::Inst().AddDeviceFrameCapturer(ctxdata.ctx, this);
+  if(ctxdata.Modern())
+    RenderDoc::Inst().AddDeviceFrameCapturer(ctxdata.ctx, this);
 
   // re-configure callstack capture, since WrappedOpenGL constructor may run too early
   uint32_t flags = m_ScratchSerialiser.GetChunkMetadataRecording();
@@ -2194,7 +2196,6 @@ void WrappedOpenGL::StartFrameCapture(void *dev, void *wnd)
   FrameDescription frame;
   frame.frameNumber = m_AppControlledCapture ? ~0U : m_FrameCounter;
   frame.captureTime = Timing::GetUnixTimestamp();
-  RDCEraseEl(frame.stats);
   m_CapturedFrames.push_back(frame);
 
   GetResourceManager()->ClearReferencedResources();
@@ -2299,6 +2300,8 @@ bool WrappedOpenGL::EndFrameCapture(void *dev, void *wnd)
       captureWriter = new StreamWriter(StreamWriter::InvalidStream);
     }
 
+    uint64_t captureSectionSize = 0;
+
     {
       WriteSerialiser ser(captureWriter, Ownership::Stream);
 
@@ -2384,15 +2387,23 @@ bool WrappedOpenGL::EndFrameCapture(void *dev, void *wnd)
 
         RDCDEBUG("Done");
       }
+
+      captureSectionSize = captureWriter->GetOffset();
     }
 
     RDCLOG("Captured GL frame with %f MB capture section in %f seconds",
-           double(captureWriter->GetOffset()) / (1024.0 * 1024.0),
-           m_CaptureTimer.GetMilliseconds() / 1000.0);
+           double(captureSectionSize) / (1024.0 * 1024.0), m_CaptureTimer.GetMilliseconds() / 1000.0);
 
     RenderDoc::Inst().FinishCaptureWriting(rdc, m_CapturedFrames.back().frameNumber);
 
     m_State = CaptureState::BackgroundCapturing;
+
+    for(const rdcpair<GLResourceRecord *, Chunk *> &r : m_BufferResizes)
+    {
+      r.first->AddChunk(r.second);
+      r.first->SetDataPtr(r.second->GetData());
+    }
+    m_BufferResizes.clear();
 
     GetResourceManager()->ResetLastWriteTimes();
 
@@ -2451,6 +2462,13 @@ bool WrappedOpenGL::EndFrameCapture(void *dev, void *wnd)
     uint32_t failedFrame = m_CapturedFrames.back().frameNumber;
 
     m_CapturedFrames.back().frameNumber = m_AppControlledCapture ? ~0U : m_FrameCounter;
+
+    for(const rdcpair<GLResourceRecord *, Chunk *> &r : m_BufferResizes)
+    {
+      r.first->AddChunk(r.second);
+      r.first->SetDataPtr(r.second->GetData());
+    }
+    m_BufferResizes.clear();
 
     CleanupCapture();
 
@@ -2523,6 +2541,13 @@ bool WrappedOpenGL::DiscardFrameCapture(void *dev, void *wnd)
   SCOPED_LOCK(glLock);
 
   RenderDoc::Inst().FinishCaptureWriting(NULL, m_CapturedFrames.back().frameNumber);
+
+  for(const rdcpair<GLResourceRecord *, Chunk *> &r : m_BufferResizes)
+  {
+    r.first->AddChunk(r.second);
+    r.first->SetDataPtr(r.second->GetData());
+  }
+  m_BufferResizes.clear();
 
   CleanupCapture();
 
@@ -5519,6 +5544,10 @@ void WrappedOpenGL::AddDrawcall(const DrawcallDescription &d, bool hasEvents)
   draw.eventId = m_CurEventID;
   draw.drawcallId = m_CurDrawcallID;
 
+  m_DrawcallParams.resize_for_index(m_CurEventID);
+  m_DrawcallParams[m_CurEventID].indexWidth = m_LastIndexWidth;
+  m_DrawcallParams[m_CurEventID].topo = m_LastTopology;
+
   GLenum type;
   GLuint curCol[8] = {0};
   GLuint curDepth = 0;
@@ -5593,8 +5622,6 @@ void WrappedOpenGL::AddEvent()
 
   apievent.chunkIndex = uint32_t(m_StructuredFile->chunks.size() - 1);
 
-  apievent.callstack = m_ChunkMetadata.callstack;
-
   m_CurEvents.push_back(apievent);
 
   if(IsLoading(m_State))
@@ -5622,6 +5649,12 @@ const DrawcallDescription *WrappedOpenGL::GetDrawcall(uint32_t eventId)
     return NULL;
 
   return m_Drawcalls[eventId];
+}
+
+const GLDrawParams &WrappedOpenGL::GetDrawcallParameters(uint32_t eventId)
+{
+  m_DrawcallParams.resize_for_index(eventId);
+  return m_DrawcallParams[eventId];
 }
 
 void WrappedOpenGL::ReplayLog(uint32_t startEventID, uint32_t endEventID, ReplayLogType replayType)

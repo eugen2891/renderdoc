@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -27,6 +27,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QScrollBar>
+#include <QStylePainter>
 #include <QWheelEvent>
 #include "Code/QRDUtils.h"
 #include "Code/Resources.h"
@@ -457,7 +458,7 @@ void TimelineBar::leaveEvent(QEvent *e)
 
 void TimelineBar::paintEvent(QPaintEvent *e)
 {
-  QPainter p(viewport());
+  QStylePainter p(viewport());
 
   p.setFont(font());
   p.setRenderHint(QPainter::TextAntialiasing);
@@ -468,11 +469,17 @@ void TimelineBar::paintEvent(QPaintEvent *e)
 
     p.fillRect(r, palette().brush(QPalette::Window));
 
-    r = r.marginsRemoved(QMargins(borderWidth + margin, borderWidth + margin, borderWidth + margin,
-                                  borderWidth + margin));
+    QRectF borderRect = r.marginsRemoved(uniformMargins(margin));
+    r = borderRect.marginsRemoved(uniformMargins(borderWidth));
 
     p.fillRect(r, palette().brush(QPalette::Base));
-    p.drawRect(r);
+
+    QStyleOptionFrame frameOpt;
+    frameOpt.initFrom(viewport());
+    frameOpt.rect = borderRect.toRect();
+    frameOpt.frameShape = QFrame::Box;
+    frameOpt.lineWidth = 1;
+    p.drawControl(QStyle::CE_ShapedFrame, frameOpt);
   }
 
   QTextOption to;
@@ -492,15 +499,16 @@ void TimelineBar::paintEvent(QPaintEvent *e)
 
     titleRect.setLeft(titleRect.left() - margin);
     titleRect.setTop(titleRect.top() - margin);
-    p.drawLine(titleRect.bottomLeft(), titleRect.bottomRight());
-    p.drawLine(titleRect.topRight(), titleRect.bottomRight());
+
+    drawLine(p, titleRect.bottomLeft(), titleRect.bottomRight());
+    drawLine(p, titleRect.topRight(), titleRect.bottomRight());
   }
 
   QRectF eidAxisRect = m_eidAxisRect;
 
-  p.drawLine(eidAxisRect.bottomLeft(), eidAxisRect.bottomRight() + QPointF(margin, 0));
+  drawLine(p, eidAxisRect.bottomLeft(), eidAxisRect.bottomRight() + QPointF(margin, 0));
 
-  p.drawLine(m_highlightingRect.topLeft(), m_highlightingRect.topRight());
+  drawLine(p, m_highlightingRect.topLeft(), m_highlightingRect.topRight());
 
   if(m_Draws.isEmpty())
     return;
@@ -553,8 +561,8 @@ void TimelineBar::paintEvent(QPaintEvent *e)
       hoverRect = hoverRect.marginsAdded(QMargins(0, margin, 0, 0));
 
       if(hoverRect.left() >= m_eidAxisRect.left())
-        p.drawLine(hoverRect.topLeft(), hoverRect.bottomLeft());
-      p.drawLine(hoverRect.topRight(), hoverRect.bottomRight());
+        drawLine(p, hoverRect.topLeft(), hoverRect.bottomLeft());
+      drawLine(p, hoverRect.topRight(), hoverRect.bottomRight());
 
       // shrink the rect a bit for clipping against labels below
       hoverRect.setX(qRound(hoverRect.x() + 0.5));
@@ -617,16 +625,17 @@ void TimelineBar::paintEvent(QPaintEvent *e)
     qreal realMiddle = currentRect.center().x();
 
     // clamp the position from the left or right side
-    if(currentRect.left() < eidAxisRect.left())
-      currentRect.moveLeft(eidAxisRect.left());
-    else if(currentRect.right() > eidAxisRect.right())
-      currentRect.moveRight(eidAxisRect.right());
+    if(currentRect.left() < m_eidAxisRect.left())
+      currentRect.moveLeft(m_eidAxisRect.left());
+    else if(currentRect.right() > m_eidAxisRect.right())
+      currentRect.moveRight(m_eidAxisRect.right());
 
     // re-add the top margin so the lines match up with the border around the EID axis
     QRectF currentBackRect = currentRect.marginsAdded(QMargins(0, margin, 0, 0));
 
     p.fillRect(currentBackRect, palette().brush(QPalette::Base));
-    p.drawRect(currentBackRect);
+    drawLine(p, currentBackRect.topLeft(), currentBackRect.bottomLeft());
+    drawLine(p, currentBackRect.topRight(), currentBackRect.bottomRight());
 
     // draw the 'current marker' pixmap
     const QPixmap &px = Pixmaps::flag_green(devicePixelRatio());
@@ -638,13 +647,13 @@ void TimelineBar::paintEvent(QPaintEvent *e)
 
     // draw a line from the bottom of the shadow downwards
     QPointF currentTop = currentRect.center();
-    currentTop.setX(int(qBound(eidAxisRect.left(), realMiddle, eidAxisRect.right() - 2.0)) + 0.5);
+    currentTop.setX(int(qBound(m_eidAxisRect.left(), realMiddle, m_eidAxisRect.right() - 2.0)) + 0.5);
     currentTop.setY(currentRect.bottom());
 
     QPointF currentBottom = currentTop;
     currentBottom.setY(m_markerRect.bottom());
 
-    p.drawLine(currentTop, currentBottom);
+    drawLine(p, currentTop, currentBottom);
   }
 
   to.setAlignment(Qt::AlignLeft | Qt::AlignTop);
@@ -813,7 +822,8 @@ void TimelineBar::paintEvent(QPaintEvent *e)
         }
         else if(use.usage == ResourceUsage::StreamOut || use.usage == ResourceUsage::ResolveDst ||
                 use.usage == ResourceUsage::ColorTarget ||
-                use.usage == ResourceUsage::DepthStencilTarget || use.usage == ResourceUsage::CopyDst)
+                use.usage == ResourceUsage::DepthStencilTarget ||
+                use.usage == ResourceUsage::CopyDst || use.usage == ResourceUsage::CPUWrite)
         {
           pipranges[WriteUsage].push(pos, triRadius);
         }
@@ -887,6 +897,22 @@ TimelineBar::Marker *TimelineBar::findMarker(QVector<Marker> &markers, QRectF ma
   }
 
   return NULL;
+}
+
+void TimelineBar::drawLine(QStylePainter &p, QPointF start, QPointF end)
+{
+  if(start.x() == end.x() || start.y() == end.y())
+  {
+    QStyleOptionFrame opt;
+    opt.initFrom(viewport());
+    opt.rect = QRectF(start, end).toRect();
+    opt.frameShape = (start.y() == end.y() ? QFrame::HLine : QFrame::VLine);
+    p.drawControl(QStyle::CE_ShapedFrame, opt);
+  }
+  else
+  {
+    p.drawLine(start, end);
+  }
 }
 
 void TimelineBar::paintMarkers(QPainter &p, const QVector<Marker> &markers,
@@ -1028,10 +1054,10 @@ uint32_t TimelineBar::processDraws(QVector<Marker> &markers, QVector<uint32_t> &
 
       maxEID = qMax(maxEID, m.eidEnd);
 
-      if(d.markerColor[3] > 0.0f)
+      if(d.markerColor.w > 0.0f)
       {
         m.color = QColor::fromRgb(
-            qRgb(d.markerColor[0] * 255.0f, d.markerColor[1] * 255.0f, d.markerColor[2] * 255.0f));
+            qRgb(d.markerColor.x * 255.0f, d.markerColor.y * 255.0f, d.markerColor.z * 255.0f));
       }
       else
       {

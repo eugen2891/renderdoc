@@ -106,9 +106,6 @@
     <ClCompile Include="vk_serialise.cpp">
       <Filter>Util</Filter>
     </ClCompile>
-    <ClCompile Include="vk_sparse_initstate.cpp">
-      <Filter>Core</Filter>
-    </ClCompile>
     <ClCompile Include="vk_postvs.cpp">
       <Filter>Replay</Filter>
     </ClCompile>
@@ -208,6 +205,9 @@
       <Filter>official</Filter>
     </ClInclude>
     <ClInclude Include="official\vulkan_core.h">
+      <Filter>official</Filter>
+    </ClInclude>
+    <ClInclude Include="official\vulkan_ggp.h">
       <Filter>official</Filter>
     </ClInclude>
     <ClInclude Include="official\vulkan_ios.h">

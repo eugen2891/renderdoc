@@ -9,13 +9,21 @@ else()
 endif()
 
 if(APPLE)
-    list(APPEND sources renderdoccmd_apple.cpp)
+    list(APPEND sources renderdoccmd_apple.cpp apple/cocoa_window.mm)
+
+    find_library(COCOA_LIBRARY Cocoa)
+    list(APPEND libraries PRIVATE ${COCOA_LIBRARY})
+
+    find_library(QUARTZCORE_LIBRARY QuartzCore)
+    list(APPEND libraries PRIVATE ${QUARTZCORE_LIBRARY})
+
 elseif(ANDROID)
-    list(APPEND sources renderdoccmd_android.cpp)
+    string(REPLACE "\\" "/" GLUE_SOURCE "${ANDROID_NDK_ROOT_PATH}/sources/android/native_app_glue/android_native_app_glue.c")
+    list(APPEND sources renderdoccmd_android.cpp "${GLUE_SOURCE}")
     include_directories(${ANDROID_NDK_ROOT_PATH}/sources/android/native_app_glue)
     list(APPEND libraries PRIVATE -llog -landroid)
     set(LINKER_FLAGS "-Wl,--no-as-needed")
-    
+
     set_source_files_properties(renderdoccmd.cpp PROPERTIES COMPILE_FLAGS "-fexceptions -frtti")
     set_source_files_properties(renderdoccmd_android.cpp PROPERTIES COMPILE_FLAGS "-fexceptions")
 elseif(ENABLE_GGP)
@@ -49,8 +57,13 @@ if(ANDROID)
 else()
     set(CMAKE_SKIP_BUILD_RPATH TRUE)
     set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
-    set(CMAKE_INSTALL_RPATH "$ORIGIN/:$ORIGIN/../lib${LIB_SUFFIX}/${LIB_SUBFOLDER_TRAIL_SLASH}")
-    set(CMAKE_EXE_LINKER_FLAGS "${LINKER_FLAGS}")
+    if(APPLE)
+        set(CMAKE_MACOSX_RPATH TRUE)
+        set(CMAKE_INSTALL_RPATH "@executable_path/../lib")
+    else()
+        set(CMAKE_INSTALL_RPATH "$ORIGIN/:$ORIGIN/../lib${LIB_SUFFIX}/${LIB_SUBFOLDER_TRAIL_SLASH}")
+    endif()
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${LINKER_FLAGS}")
 
     add_executable(renderdoccmd ${sources})
 endif()
@@ -61,6 +74,10 @@ target_link_libraries(renderdoccmd ${libraries})
 install (TARGETS renderdoccmd DESTINATION bin)
 
 if(ANDROID)
+    # Android sets this to off becuase Android is always terrible forever.
+    # It breaks finding java in the path, so enable it again
+    set(CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH ON)
+
     #############################
     # We need to check that 'java' in PATH is new enough. Temporarily unset the JAVA_HOME env,
     # then invoke FindJava.cmake which will search just the PATH, then re-set it.
@@ -75,10 +92,11 @@ if(ANDROID)
     endif()
     message(STATUS "Using Java of version ${Java_VERSION}")
 
-    if(STRIP_ANDROID_LIBRARY AND CMAKE_STRIP AND CMAKE_BUILD_TYPE STREQUAL "Release")
+    if(STRIP_ANDROID_LIBRARY AND ANDROID_STRIP_TOOL AND RELEASE_MODE)
         add_custom_command(TARGET renderdoccmd POST_BUILD
             COMMAND echo Stripping $<TARGET_FILE:renderdoccmd>
-            COMMAND ${CMAKE_STRIP} --strip-unneeded $<TARGET_FILE:renderdoccmd>)
+            COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:renderdoccmd> $<TARGET_FILE:renderdoccmd>.dbg
+            COMMAND ${ANDROID_STRIP_TOOL} --strip-unneeded $<TARGET_FILE:renderdoccmd>)
     endif()
 
     set(ANDROID_BUILD_TOOLS_VERSION "" CACHE STRING "Version of Android build-tools to use instead of the default")
@@ -92,7 +110,7 @@ if(ANDROID)
         unset(__buildTools)
     endif()
     message(STATUS "Using Android build-tools version ${ANDROID_BUILD_TOOLS_VERSION}")
-    
+
     set(APK_TARGET_ID "" CACHE STRING "The Target ID to build the APK for like 'android-99', use <android list targets> to choose another one.")
     if(APK_TARGET_ID STREQUAL "")
         # This seems different from the platform we're targetting,
@@ -135,7 +153,7 @@ if(ANDROID)
     set(RT_JAR "$ENV{JAVA_HOME}/jre/lib/rt.jar")
     set(JAVA_BIN "$ENV{JAVA_HOME}/bin")
 
-    set(ANDROID_JAR "${ANDROID_SDK_ROOT_PATH}/platforms/${APK_TARGET_ID}/android.jar")
+    string(REPLACE "\\" "/" ANDROID_JAR "${ANDROID_SDK_ROOT_PATH}/platforms/${APK_TARGET_ID}/android.jar")
     if(CMAKE_HOST_WIN32)
         set(CLASS_PATH "${ANDROID_JAR}\;obj")
     else()
@@ -157,6 +175,10 @@ if(ANDROID)
         set(RENDERDOC_ANDROID_PACKAGE_NAME "org.renderdoc.renderdoccmd.arm32")
     elseif(ANDROID_ABI STREQUAL "arm64-v8a")
         set(RENDERDOC_ANDROID_PACKAGE_NAME "org.renderdoc.renderdoccmd.arm64")
+    elseif(ANDROID_ABI STREQUAL "x86")
+        set(RENDERDOC_ANDROID_PACKAGE_NAME "org.renderdoc.renderdoccmd.x86")
+    elseif(ANDROID_ABI STREQUAL "x86_64")
+        set(RENDERDOC_ANDROID_PACKAGE_NAME "org.renderdoc.renderdoccmd.x64")
     else()
         message(FATAL_ERROR "ABI ${ANDROID_ABI} is not supported.")
     endif()

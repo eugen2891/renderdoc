@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -284,7 +284,8 @@ struct PixelHistoryShaderCache
   // Returns a shader that is equivalent to the given shader, but attempts to remove
   // side effects of shader execution for the given entry point (for ex., writes
   // to storage buffers/images).
-  VkShaderModule GetShaderWithoutSideEffects(ResourceId shaderId, const rdcstr &entryPoint)
+  VkShaderModule GetShaderWithoutSideEffects(ResourceId shaderId, const rdcstr &entryPoint,
+                                             ShaderStage stage)
   {
     ShaderKey shaderKey = make_rdcpair(shaderId, entryPoint);
     auto it = m_ShaderReplacements.find(shaderKey);
@@ -292,13 +293,14 @@ struct PixelHistoryShaderCache
     if(it != m_ShaderReplacements.end())
       return it->second;
 
-    VkShaderModule shaderModule = CreateShaderReplacement(shaderId, entryPoint);
+    VkShaderModule shaderModule = CreateShaderReplacement(shaderId, entryPoint, stage);
     m_ShaderReplacements.insert(std::make_pair(shaderKey, shaderModule));
     return shaderModule;
   }
 
 private:
-  VkShaderModule CreateShaderReplacement(ResourceId shaderId, const rdcstr &entryName)
+  VkShaderModule CreateShaderReplacement(ResourceId shaderId, const rdcstr &entryName,
+                                         ShaderStage stage)
   {
     const VulkanCreationInfo::ShaderModule &moduleInfo =
         m_pDriver->GetDebugManager()->GetShaderInfo(shaderId);
@@ -308,7 +310,7 @@ private:
 
     for(const rdcspv::EntryPoint &entry : editor.GetEntries())
     {
-      if(entry.name == entryName)
+      if(entry.name == entryName && MakeShaderStage(entry.executionModel) == stage)
       {
         // In some cases a shader might just be binding a RW resource but not writing to it.
         // If there are no writes (shader was not modified), no need to replace the shader,
@@ -595,8 +597,8 @@ protected:
     for(size_t i = 0; i < numberOfStages; i++)
     {
       if((eventFlags & PipeStageRWEventFlags(StageFromIndex(i))) != EventFlags::NoFlags)
-        replacementShaders[i] =
-            m_ShaderCache->GetShaderWithoutSideEffects(p.shaders[i].module, p.shaders[i].entryPoint);
+        replacementShaders[i] = m_ShaderCache->GetShaderWithoutSideEffects(
+            p.shaders[i].module, p.shaders[i].entryPoint, p.shaders[i].stage);
     }
     for(uint32_t i = 0; i < pipeCreateInfo.stageCount; i++)
     {
@@ -803,9 +805,11 @@ protected:
   // substitutes the depth stencil image view. If there is no depth stencil attachment,
   // it will be added. Optionally, also substitutes the original target image view with
   // the newColorAtt.
-  VkFramebuffer CreateFramebuffer(ResourceId rp, VkRenderPass newRp, ResourceId origFb,
+  VkFramebuffer CreateFramebuffer(const VulkanRenderState &pipestate, VkRenderPass newRp,
                                   VkImageView newColorAtt = VK_NULL_HANDLE, uint32_t colorIdx = 0)
   {
+    ResourceId rp = pipestate.renderPass;
+    ResourceId origFb = pipestate.GetFramebuffer();
     const VulkanCreationInfo::RenderPass &rpInfo =
         m_pDriver->GetDebugManager()->GetRenderPassInfo(rp);
     // Currently only single subpass render passes are supported.
@@ -817,7 +821,7 @@ protected:
     for(uint32_t i = 0; i < fbInfo.attachments.size(); i++)
     {
       atts[i] = m_pDriver->GetResourceManager()->GetCurrentHandle<VkImageView>(
-          fbInfo.attachments[i].createdView);
+          pipestate.GetFramebufferAttachments()[i]);
     }
 
     // Either modify the existing color attachment view, or add a new one.
@@ -1272,8 +1276,7 @@ struct VulkanColorAndStencilCallback : public VulkanPixelHistoryCallback
     {
       bool multiview = false;
       VkRenderPass newRp = CreateRenderPass(pipestate.renderPass, multiview);
-      VkFramebuffer newFb =
-          CreateFramebuffer(pipestate.renderPass, newRp, pipestate.GetFramebuffer());
+      VkFramebuffer newFb = CreateFramebuffer(pipestate, newRp);
 
       PipelineReplacements replacements = GetPipelineReplacements(
           eid, pipestate.graphics.pipeline, newRp, GetColorAttachmentIndex(prevState));
@@ -1781,6 +1784,13 @@ private:
     }
 
     // Depth and Stencil tests.
+    const VulkanCreationInfo::RenderPass &rpInfo =
+        m_pDriver->GetDebugManager()->GetRenderPassInfo(pipestate.renderPass);
+    // TODO: this should retrieve the correct subpass, once multiple subpasses
+    // are supported.
+    const VulkanCreationInfo::RenderPass::Subpass &sub = rpInfo.subpasses.front();
+
+    if(sub.depthstencilAttachment != -1)
     {
       if(pipestate.depthBoundsTestEnable)
         flags |= TestEnabled_DepthBounds;
@@ -1930,8 +1940,8 @@ private:
       ShaderStage stage = StageFromIndex(i);
       bool rwInStage = (eventShaderFlags & PipeStageRWEventFlags(stage)) != EventFlags::NoFlags;
       if(rwInStage || (stage == ShaderStage::Fragment))
-        replacementShaders[i] =
-            m_ShaderCache->GetShaderWithoutSideEffects(p.shaders[i].module, p.shaders[i].entryPoint);
+        replacementShaders[i] = m_ShaderCache->GetShaderWithoutSideEffects(
+            p.shaders[i].module, p.shaders[i].entryPoint, p.shaders[i].stage);
     }
 
     VulkanRenderState &pipestate = m_pDriver->GetCmdRenderState();
@@ -2226,8 +2236,8 @@ struct VulkanPixelHistoryPerFragmentCallback : VulkanPixelHistoryCallback
     VkRenderPass newRp = CreateRenderPass(state.renderPass, multiview,
                                           VK_FORMAT_R32G32B32A32_SFLOAT, framebufferIndex);
 
-    VkFramebuffer newFb = CreateFramebuffer(state.renderPass, newRp, state.GetFramebuffer(),
-                                            m_CallbackInfo.subImageView, framebufferIndex);
+    VkFramebuffer newFb =
+        CreateFramebuffer(state, newRp, m_CallbackInfo.subImageView, framebufferIndex);
 
     Pipelines pipes = CreatePerFragmentPipelines(curPipeline, newRp, eid, 0, colorOutputIndex);
 
@@ -2425,7 +2435,7 @@ struct VulkanPixelHistoryPerFragmentCallback : VulkanPixelHistoryCallback
 
         clearAtts[0].aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         clearAtts[0].colorAttachment = colorOutputIndex;
-        memcpy(clearAtts[0].clearValue.color.float32, premod.col.floatValue,
+        memcpy(clearAtts[0].clearValue.color.float32, premod.col.floatValue.data(),
                sizeof(clearAtts[0].clearValue.color));
 
         clearAtts[1].aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
@@ -2506,8 +2516,8 @@ struct VulkanPixelHistoryPerFragmentCallback : VulkanPixelHistoryCallback
     for(size_t i = 0; i < numberOfStages; i++)
     {
       if((eventFlags & PipeStageRWEventFlags(StageFromIndex(i))) != EventFlags::NoFlags)
-        replacementShaders[i] =
-            m_ShaderCache->GetShaderWithoutSideEffects(p.shaders[i].module, p.shaders[i].entryPoint);
+        replacementShaders[i] = m_ShaderCache->GetShaderWithoutSideEffects(
+            p.shaders[i].module, p.shaders[i].entryPoint, p.shaders[i].stage);
     }
     for(uint32_t i = 0; i < pipeCreateInfo.stageCount; i++)
     {
@@ -2700,6 +2710,9 @@ struct VulkanPixelHistoryDiscardedFragmentsCallback : VulkanPixelHistoryCallback
     for(uint32_t i = 0; i < state.views.size(); i++)
       ScissorToPixel(state.views[i], state.scissors[i]);
     state.graphics.pipeline = GetResID(newPipe);
+    const VulkanCreationInfo::Pipeline &p =
+        m_pDriver->GetDebugManager()->GetPipelineInfo(state.graphics.pipeline);
+    Topology topo = MakePrimitiveTopology(state.primitiveTopology, p.patchControlPoints);
     state.BindPipeline(m_pDriver, cmd, VulkanRenderState::BindGraphics, false);
     for(uint32_t i = 0; i < primIds.size(); i++)
     {
@@ -2708,9 +2721,9 @@ struct VulkanPixelHistoryDiscardedFragmentsCallback : VulkanPixelHistoryCallback
       const DrawcallDescription *drawcall = m_pDriver->GetDrawcall(eid);
       uint32_t primId = primIds[i];
       DrawcallDescription draw = *drawcall;
-      draw.numIndices = RENDERDOC_NumVerticesPerPrimitive(drawcall->topology);
-      draw.indexOffset += RENDERDOC_VertexOffset(drawcall->topology, primId);
-      draw.vertexOffset += RENDERDOC_VertexOffset(drawcall->topology, primId);
+      draw.numIndices = RENDERDOC_NumVerticesPerPrimitive(topo);
+      draw.indexOffset += RENDERDOC_VertexOffset(topo, primId);
+      draw.vertexOffset += RENDERDOC_VertexOffset(topo, primId);
       // TODO once pixel history distinguishes between instances, draw only the instance for
       // this fragment.
       // TODO replay with a dummy index buffer so that all primitives other than the target one are
@@ -3175,7 +3188,7 @@ void UpdateTestsFailed(const TestsFailedCallback *tfCb, uint32_t eventId, uint32
 void FillInColor(ResourceFormat fmt, const PixelHistoryValue &value, ModificationValue &mod)
 {
   FloatVector v4 = DecodeFormattedComponents(fmt, value.color);
-  memcpy(mod.col.floatValue, &v4, sizeof(v4));
+  memcpy(mod.col.floatValue.data(), &v4, sizeof(v4));
 }
 
 float GetDepthValue(VkFormat depthFormat, const PixelHistoryValue &value)

@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -740,6 +740,15 @@ void D3D11Replay::SavePipelineState(uint32_t eventId)
   ret.inputAssembly.indexBuffer.resourceId =
       rm->GetOriginalID(GetIDForDeviceChild(rs->IA.IndexBuffer));
   ret.inputAssembly.indexBuffer.byteOffset = rs->IA.IndexOffset;
+  switch(rs->IA.IndexFormat)
+  {
+    case DXGI_FORMAT_R32_UINT: ret.inputAssembly.indexBuffer.byteStride = 4; break;
+    case DXGI_FORMAT_R16_UINT: ret.inputAssembly.indexBuffer.byteStride = 2; break;
+    case DXGI_FORMAT_R8_UINT: ret.inputAssembly.indexBuffer.byteStride = 1; break;
+    default: ret.inputAssembly.indexBuffer.byteStride = 0; break;
+  }
+
+  ret.inputAssembly.topology = MakePrimitiveTopology(rs->IA.Topo);
 
   /////////////////////////////////////////////////
   // Shaders
@@ -802,7 +811,7 @@ void D3D11Replay::SavePipelineState(uint32_t eventId)
           samp.addressV = MakeAddressMode(desc.AddressV);
           samp.addressW = MakeAddressMode(desc.AddressW);
 
-          memcpy(samp.borderColor, desc.BorderColor, sizeof(FLOAT) * 4);
+          samp.borderColor = desc.BorderColor;
 
           samp.compareFunction = MakeCompareFunc(desc.ComparisonFunc);
           samp.filter = MakeFilter(desc.Filter);
@@ -1142,10 +1151,11 @@ void D3D11Replay::SavePipelineState(uint32_t eventId)
     for(i = 0; i < rs->RS.NumScissors; i++)
       ret.rasterizer.scissors[i] = Scissor(rs->RS.Scissors[i].left, rs->RS.Scissors[i].top,
                                            rs->RS.Scissors[i].right - rs->RS.Scissors[i].left,
-                                           rs->RS.Scissors[i].bottom - rs->RS.Scissors[i].top, true);
+                                           rs->RS.Scissors[i].bottom - rs->RS.Scissors[i].top,
+                                           ret.rasterizer.state.scissorEnable);
 
     for(; i < D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE; i++)
-      ret.rasterizer.scissors[i] = Scissor(0, 0, 0, 0, false);
+      ret.rasterizer.scissors[i] = Scissor(0, 0, 0, 0, ret.rasterizer.state.scissorEnable);
 
     ret.rasterizer.viewports.resize(D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE);
     for(i = 0; i < rs->RS.NumViews; i++)
@@ -1400,7 +1410,7 @@ void D3D11Replay::SavePipelineState(uint32_t eventId)
 
     ret.outputMerger.blendState.sampleMask = rs->OM.SampleMask;
 
-    memcpy(ret.outputMerger.blendState.blendFactor, rs->OM.BlendFactor, sizeof(FLOAT) * 4);
+    ret.outputMerger.blendState.blendFactor = rs->OM.BlendFactor;
 
     if(rs->OM.BlendState)
     {
@@ -1579,8 +1589,7 @@ rdcarray<uint32_t> D3D11Replay::GetPassEvents(uint32_t eventId)
   {
     const DrawcallDescription *prev = start->previous;
 
-    if(memcmp(start->outputs, prev->outputs, sizeof(start->outputs)) != 0 ||
-       start->depthOut != prev->depthOut)
+    if(start->outputs != prev->outputs || start->depthOut != prev->depthOut)
       break;
 
     start = prev;
@@ -1807,7 +1816,7 @@ bool D3D11Replay::GetMinMax(ResourceId texid, const Subresource &sub, CompType t
 }
 
 bool D3D11Replay::GetHistogram(ResourceId texid, const Subresource &sub, CompType typeCast,
-                               float minval, float maxval, bool channels[4],
+                               float minval, float maxval, const rdcfixedarray<bool, 4> &channels,
                                rdcarray<uint32_t> &histogram)
 {
   if(minval >= maxval)

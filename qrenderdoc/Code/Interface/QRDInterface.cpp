@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -160,7 +160,7 @@ CaptureSettings::CaptureSettings(const QVariant &v)
     numQueuedFrames = 0;
 }
 
-rdcstr configFilePath(const rdcstr &filename)
+rdcstr ConfigFilePath(const rdcstr &filename)
 {
   QString path = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
 
@@ -169,17 +169,4 @@ rdcstr configFilePath(const rdcstr &filename)
     dir.mkdir(lit("."));
 
   return QDir::cleanPath(dir.absoluteFilePath(filename));
-}
-
-ICaptureContext *getCaptureContext(const QWidget *widget)
-{
-  void *ctxptr = NULL;
-
-  while(widget && !ctxptr)
-  {
-    ctxptr = widget->property("ICaptureContext").value<void *>();
-    widget = widget->parentWidget();
-  }
-
-  return (ICaptureContext *)ctxptr;
 }

@@ -1,7 +1,7 @@
 /******************************************************************************
 * The MIT License (MIT)
 *
-* Copyright (c) 2019-2020 Baldur Karlsson
+* Copyright (c) 2019-2021 Baldur Karlsson
 *
 * Permission is hereby granted, free of charge, to any person obtaining a copy
 * of this software and associated documentation files (the "Software"), to deal
@@ -422,6 +422,10 @@ float4 main(float4 pos : SV_Position) : SV_Target0
   dev2 = dev;
   dev3 = dev;
   dev4 = dev;
+  dev5 = dev;
+  dev6 = dev;
+  dev7 = dev;
+  dev8 = dev;
 
   if(infoqueue)
   {

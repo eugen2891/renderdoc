@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -1222,8 +1222,10 @@ void D3D12DebugManager::GetBufferData(ID3D12Resource *buffer, uint64_t offset, u
     return;
 
   D3D12_RESOURCE_DESC desc = buffer->GetDesc();
-  D3D12_HEAP_PROPERTIES heapProps;
-  buffer->GetHeapProperties(&heapProps, NULL);
+  D3D12_HEAP_PROPERTIES heapProps = {};
+  // can't call GetHeapProperties on sparse resources
+  if(!m_pDevice->IsSparseResource(GetResID(buffer)))
+    buffer->GetHeapProperties(&heapProps, NULL);
 
   if(offset >= desc.Width)
   {
@@ -2260,29 +2262,29 @@ void MoveRootSignatureElementsToRegisterSpace(D3D12RootSignature &sig, uint32_t 
           D3D12_DESCRIPTOR_RANGE_TYPE rangeType = sig.Parameters[i].ranges[r].RangeType;
           if(rangeType == D3D12_DESCRIPTOR_RANGE_TYPE_CBV && type == D3D12DescriptorType::CBV)
           {
-            sig.Parameters[i].ranges[r].RegisterSpace = registerSpace;
+            sig.Parameters[i].ranges[r].RegisterSpace += registerSpace;
           }
           else if(rangeType == D3D12_DESCRIPTOR_RANGE_TYPE_SRV && type == D3D12DescriptorType::SRV)
           {
-            sig.Parameters[i].ranges[r].RegisterSpace = registerSpace;
+            sig.Parameters[i].ranges[r].RegisterSpace += registerSpace;
           }
           else if(rangeType == D3D12_DESCRIPTOR_RANGE_TYPE_UAV && type == D3D12DescriptorType::UAV)
           {
-            sig.Parameters[i].ranges[r].RegisterSpace = registerSpace;
+            sig.Parameters[i].ranges[r].RegisterSpace += registerSpace;
           }
         }
       }
       else if(rootType == D3D12_ROOT_PARAMETER_TYPE_CBV && type == D3D12DescriptorType::CBV)
       {
-        sig.Parameters[i].Descriptor.RegisterSpace = registerSpace;
+        sig.Parameters[i].Descriptor.RegisterSpace += registerSpace;
       }
       else if(rootType == D3D12_ROOT_PARAMETER_TYPE_SRV && type == D3D12DescriptorType::SRV)
       {
-        sig.Parameters[i].Descriptor.RegisterSpace = registerSpace;
+        sig.Parameters[i].Descriptor.RegisterSpace += registerSpace;
       }
       else if(rootType == D3D12_ROOT_PARAMETER_TYPE_UAV && type == D3D12DescriptorType::UAV)
       {
-        sig.Parameters[i].Descriptor.RegisterSpace = registerSpace;
+        sig.Parameters[i].Descriptor.RegisterSpace += registerSpace;
       }
     }
   }

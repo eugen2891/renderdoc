@@ -66,7 +66,9 @@ class Draw_Zoo(rdtest.TestCase):
         if 'restarts' in ref_data:
             restarts = ref_data['restarts']
 
-        striprestart_index = self.pipe.GetStripRestartIndex() & ((1 << (draw.indexByteWidth*8)) - 1)
+        ib = self.pipe.GetIBuffer()
+
+        striprestart_index = self.pipe.GetStripRestartIndex() & ((1 << (ib.byteStride*8)) - 1)
 
         for v in range(num_verts):
             if v in restarts:
@@ -163,7 +165,7 @@ class Draw_Zoo(rdtest.TestCase):
                         "Output {} at vert {} (idx {}) instance {} has different size ({} values) to expectation ({} values)"
                             .format(name, vtx, idx, inst, value.columns, len(expect)))
 
-                debugged = value.value.fv[0:value.columns]
+                debugged = value.value.f32v[0:value.columns]
 
                 if not rdtest.value_compare(expect, debugged):
                     raise rdtest.TestFailureException(

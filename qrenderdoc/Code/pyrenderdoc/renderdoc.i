@@ -87,6 +87,8 @@
 %ignore rdcdatetime;
 %ignore rdcstr;
 %ignore rdcinflexiblestr;
+%ignore rdcfixedarray;
+%ignore rdcfixedarray::operator[];
 %ignore rdcliteral;
 %ignore rdcpair;
 %ignore bytebuf;
@@ -198,19 +200,6 @@ SIMPLE_TYPEMAPS(rdcinflexiblestr)
 SIMPLE_TYPEMAPS(rdcdatetime)
 SIMPLE_TYPEMAPS(bytebuf)
 
-FIXED_ARRAY_TYPEMAPS(ResourceId)
-FIXED_ARRAY_TYPEMAPS(double)
-FIXED_ARRAY_TYPEMAPS(float)
-FIXED_ARRAY_TYPEMAPS(bool)
-FIXED_ARRAY_TYPEMAPS(uint64_t)
-FIXED_ARRAY_TYPEMAPS(int64_t)
-FIXED_ARRAY_TYPEMAPS(uint32_t)
-FIXED_ARRAY_TYPEMAPS(int32_t)
-FIXED_ARRAY_TYPEMAPS(uint16_t)
-FIXED_ARRAY_TYPEMAPS(int16_t)
-FIXED_ARRAY_TYPEMAPS(uint8_t)
-FIXED_ARRAY_TYPEMAPS(int8_t)
-
 REFCOUNTED_TYPE(SDChunk);
 REFCOUNTED_TYPE(SDObject);
 
@@ -229,6 +218,7 @@ NON_TEMPLATE_ARRAY_INSTANTIATE(StructuredBufferList)
 // these types are to be treated like python lists/arrays, and will be instantiated after declaration
 // below
 TEMPLATE_ARRAY_DECLARE(rdcarray);
+TEMPLATE_FIXEDARRAY_DECLARE(rdcfixedarray);
 
 ///////////////////////////////////////////////////////////////////////////////////////////
 // Actually include header files here. Note that swig is configured not to recurse, so we
@@ -264,15 +254,29 @@ TEMPLATE_ARRAY_DECLARE(rdcarray);
   %rename("%s") count;
 }
 
-%inline %{
+  %feature("docstring") R"(Returns a string representation of an object. This is quite similar to
+the built-in repr() function but it iterates over struct members and prints them out, where normally
+repr() would stop and say something like 'Swig Object of type ...'.
 
+:param Any obj: The object to dump
+:return: The string representation of the object.
+:rtype: str
+)";
+
+%inline %{
+  
 extern "C" PyObject *RENDERDOC_DumpObject(PyObject *obj);
 
 %}
 
+  %feature("docstring") "";
+
 %extend SDObject {
   %feature("docstring") R"(Interprets the object as an integer and returns its value.
 Invalid if the object is not actually an integer.
+
+:return: The interpreted integer.
+:rtype: int
 )";
   PyObject *AsInt()
   {
@@ -284,11 +288,17 @@ Invalid if the object is not actually an integer.
   
   %feature("docstring") R"(Interprets the object as a floating point number and returns its value.
 Invalid if the object is not actually a floating point number.
+
+:return: The interpreted float.
+:rtype: float
 )";
   PyObject *AsFloat() { return ConvertToPy($self->data.basic.d); }
   
   %feature("docstring") R"(Interprets the object as a string and returns its value.
 Invalid if the object is not actually a string.
+
+:return: The interpreted string.
+:rtype: str
 )";
   PyObject *AsString() { return ConvertToPy($self->data.str); }
 }
@@ -298,6 +308,29 @@ EXTEND_ARRAY_CLASS_METHODS(rdcarray)
 EXTEND_ARRAY_CLASS_METHODS(StructuredChunkList)
 EXTEND_ARRAY_CLASS_METHODS(StructuredObjectList)
 EXTEND_ARRAY_CLASS_METHODS(StructuredBufferList)
+
+// If you get an error with add_your_use_of_rdcfixedarray_to_swig_interface missing, add your type here
+// or in qrenderdoc.i, depending on which one is appropriate
+TEMPLATE_FIXEDARRAY_INSTANTIATE(rdcfixedarray, float, 2)
+TEMPLATE_FIXEDARRAY_INSTANTIATE(rdcfixedarray, float, 4)
+TEMPLATE_FIXEDARRAY_INSTANTIATE(rdcfixedarray, uint32_t, 3)
+TEMPLATE_FIXEDARRAY_INSTANTIATE(rdcfixedarray, uint32_t, 4)
+TEMPLATE_FIXEDARRAY_INSTANTIATE(rdcfixedarray, uint64_t, 4)
+TEMPLATE_FIXEDARRAY_INSTANTIATE(rdcfixedarray, int32_t, 4)
+TEMPLATE_FIXEDARRAY_INSTANTIATE(rdcfixedarray, ResourceId, 4)
+TEMPLATE_FIXEDARRAY_INSTANTIATE(rdcfixedarray, ResourceId, 8)
+TEMPLATE_FIXEDARRAY_INSTANTIATE(rdcfixedarray, bool, 4)
+TEMPLATE_FIXEDARRAY_INSTANTIATE(rdcfixedarray, bool, 8)
+TEMPLATE_FIXEDARRAY_INSTANTIATE(rdcfixedarray, float, 16)
+TEMPLATE_FIXEDARRAY_INSTANTIATE(rdcfixedarray, int32_t, 16)
+TEMPLATE_FIXEDARRAY_INSTANTIATE(rdcfixedarray, uint32_t, 16)
+TEMPLATE_FIXEDARRAY_INSTANTIATE(rdcfixedarray, double, 16)
+TEMPLATE_FIXEDARRAY_INSTANTIATE(rdcfixedarray, uint64_t, 16)
+TEMPLATE_FIXEDARRAY_INSTANTIATE(rdcfixedarray, int64_t, 16)
+TEMPLATE_FIXEDARRAY_INSTANTIATE(rdcfixedarray, uint16_t, 16)
+TEMPLATE_FIXEDARRAY_INSTANTIATE(rdcfixedarray, int16_t, 16)
+TEMPLATE_FIXEDARRAY_INSTANTIATE(rdcfixedarray, uint8_t, 16)
+TEMPLATE_FIXEDARRAY_INSTANTIATE(rdcfixedarray, int8_t, 16)
 
 // list of array types. These are the concrete types used in rdcarray that will be bound
 // If you get an error with add_your_use_of_rdcarray_to_swig_interface missing, add your type here
@@ -348,7 +381,11 @@ TEMPLATE_ARRAY_INSTANTIATE(rdcarray, BoundResourceArray)
 TEMPLATE_ARRAY_INSTANTIATE(rdcarray, FloatVector)
 TEMPLATE_ARRAY_INSTANTIATE(rdcarray, GraphicsAPI)
 TEMPLATE_ARRAY_INSTANTIATE(rdcarray, GPUDevice)
-TEMPLATE_ARRAY_INSTANTIATE(rdcarray, ShaderVariableType)
+TEMPLATE_ARRAY_INSTANTIATE(rdcarray, ShaderConstantType)
+TEMPLATE_ARRAY_INSTANTIATE(rdcarray, ShaderChangeStats)
+TEMPLATE_ARRAY_INSTANTIATE(rdcarray, ResourceBindStats)
+TEMPLATE_ARRAY_INSTANTIATE(rdcarray, SamplerBindStats)
+TEMPLATE_ARRAY_INSTANTIATE(rdcarray, ConstantBindStats)
 TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, VKPipe, Attachment)
 TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, VKPipe, BindingElement)
 TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, VKPipe, DescriptorBinding)
@@ -356,7 +393,6 @@ TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, VKPipe, DescriptorSet)
 TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, VKPipe, ImageData)
 TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, VKPipe, ImageLayout)
 TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, VKPipe, RenderArea)
-TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, VKPipe, SpecializationConstant)
 TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, VKPipe, XFBBuffer)
 TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, VKPipe, VertexBuffer)
 TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, VKPipe, VertexAttribute)
@@ -432,52 +468,78 @@ extern "C" PyObject *RENDERDOC_DumpObject(PyObject *obj)
     return PyObject_Repr(obj);
   }
 
-  PyObject *ret = PyDict_New();
-
-  // otherwise iterate over the dir
-  PyObject *dir = PyObject_Dir(obj);
-
-  Py_ssize_t size = PyList_Size(dir);
-
-  for(Py_ssize_t i = 0; i < size; i++)
+  PyObject *ret;
+  
+  if(PySequence_Check(obj))
   {
-    PyObject *member = PyList_GetItem(dir, i);
+    ret = PyList_New(0);
 
-    PyObject *bytes = PyUnicode_AsUTF8String(member);
+    Py_ssize_t size = PySequence_Size(obj);
 
-    if(!bytes)
-      continue;
-
-    char *buf = NULL;
-    Py_ssize_t size = 0;
-
-    if(PyBytes_AsStringAndSize(bytes, &buf, &size) == 0)
+    for(Py_ssize_t i = 0; i < size; i++)
     {
-      rdcstr name;
-      name.assign(buf, size);
+      PyObject *entry = PySequence_GetItem(obj, i);
 
-      if(name.beginsWith("__") || name == "this" || name == "thisown" || name == "acquire")
+      // don't add callables
+      if(PyCallable_Check(entry) == 0)
       {
-        // skip this member, it's internal
+        PyObject *childDump = RENDERDOC_DumpObject(entry);
+        PyList_Append(ret, childDump);
+        Py_XDECREF(childDump);
       }
-      else
-      {
-        PyObject *child = PyObject_GetAttr(obj, member);
 
-        // don't add callables
-        if(PyCallable_Check(child) == 0)
+      Py_XDECREF(entry);
+    }
+  }
+  else
+  {
+    ret = PyDict_New();
+
+    // otherwise iterate over the dir
+    PyObject *dir = PyObject_Dir(obj);
+
+    Py_ssize_t size = PyList_Size(dir);
+
+    for(Py_ssize_t i = 0; i < size; i++)
+    {
+      PyObject *member = PyList_GetItem(dir, i);
+
+      PyObject *bytes = PyUnicode_AsUTF8String(member);
+
+      if(!bytes)
+        continue;
+
+      char *buf = NULL;
+      Py_ssize_t size = 0;
+
+      if(PyBytes_AsStringAndSize(bytes, &buf, &size) == 0)
+      {
+        rdcstr name;
+        name.assign(buf, size);
+
+        if(name.beginsWith("__") || name == "this" || name == "thisown" || name == "acquire")
         {
-          PyObject *childDump = RENDERDOC_DumpObject(child);
-          PyDict_SetItem(ret, member, childDump);
-          Py_XDECREF(childDump);
+          // skip this member, it's internal
+        }
+        else
+        {
+          PyObject *child = PyObject_GetAttr(obj, member);
+
+          // don't add callables
+          if(PyCallable_Check(child) == 0)
+          {
+            PyObject *childDump = RENDERDOC_DumpObject(child);
+            PyDict_SetItem(ret, member, childDump);
+            Py_XDECREF(childDump);
+          }
         }
       }
+
+      Py_XDECREF(bytes);
     }
 
-    Py_XDECREF(bytes);
+    Py_XDECREF(dir);
   }
-
-  Py_XDECREF(dir);
 
   return ret;
 }

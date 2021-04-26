@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -65,27 +65,6 @@ ReplayController::ReplayController()
 ReplayController::~ReplayController()
 {
   CHECK_REPLAY_THREAD();
-
-  RDCLOG("Shutting down replay renderer");
-
-  for(size_t i = 0; i < m_Outputs.size(); i++)
-    SAFE_DELETE(m_Outputs[i]);
-
-  m_Outputs.clear();
-
-  for(auto it = m_CustomShaders.begin(); it != m_CustomShaders.end(); ++it)
-    m_pDevice->FreeCustomShader(*it);
-
-  m_CustomShaders.clear();
-
-  for(auto it = m_TargetResources.begin(); it != m_TargetResources.end(); ++it)
-    m_pDevice->FreeTargetResource(*it);
-
-  m_TargetResources.clear();
-
-  if(m_pDevice)
-    m_pDevice->Shutdown();
-  m_pDevice = NULL;
 }
 
 void ReplayController::SetFrameEvent(uint32_t eventId, bool force)
@@ -162,7 +141,7 @@ rdcarray<rdcstr> ReplayController::GetDisassemblyTargets(bool withPipeline)
 }
 
 rdcstr ReplayController::DisassembleShader(ResourceId pipeline, const ShaderReflection *refl,
-                                           const char *target)
+                                           const rdcstr &target)
 {
   CHECK_REPLAY_THREAD();
 
@@ -373,7 +352,7 @@ void ReplayController::AddFakeMarkers()
     mark.drawcallId = draws[start].drawcallId;
 
     mark.flags = DrawFlags::PushMarker;
-    memcpy(mark.outputs, draws[end].outputs, sizeof(mark.outputs));
+    mark.outputs = draws[end].outputs;
     mark.depthOut = draws[end].depthOut;
 
     mark.name = "Guessed Pass";
@@ -555,7 +534,7 @@ bytebuf ReplayController::GetTextureData(ResourceId tex, const Subresource &sub)
   return ret;
 }
 
-bool ReplayController::SaveTexture(const TextureSave &saveData, const char *path)
+bool ReplayController::SaveTexture(const TextureSave &saveData, const rdcstr &path)
 {
   CHECK_REPLAY_THREAD();
   RENDERDOC_PROFILEFUNCTION();
@@ -610,7 +589,7 @@ bool ReplayController::SaveTexture(const TextureSave &saveData, const char *path
   // store sample count so we know how many 'slices' is one real slice
   // multisampled textures cannot have mips, subresource layout is same as would be for mips:
   // [slice0 sample0], [slice0 sample1], [slice1 sample0], [slice1 sample1]
-  uint32_t sampleCount = td.msSamp;
+  uint32_t sampleCount = RDCMAX(td.msSamp, 1U);
   bool multisampled = td.msSamp > 1;
 
   if(sd.sample.mapToArray)
@@ -1169,18 +1148,18 @@ bool ReplayController::SaveTexture(const TextureSave &saveData, const char *path
     rowPitch = td.width * 3;
   }
 
-  FILE *f = FileIO::fopen(path, "wb");
+  FILE *f = FileIO::fopen(path, FileIO::WriteBinary);
 
   if(!f)
   {
     success = false;
-    RDCERR("Couldn't write to path %s, error: %s", path, FileIO::ErrorString().c_str());
+    RDCERR("Couldn't write to path %s, error: %s", path.c_str(), FileIO::ErrorString().c_str());
   }
   else
   {
     if(sd.destType == FileType::DDS)
     {
-      dds_data ddsData;
+      write_dds_data ddsData;
 
       ResourceFormat saveFmt = td.format;
       // use typeCast to inform typeless saving, otherwise it will get lost
@@ -1193,7 +1172,7 @@ bool ReplayController::SaveTexture(const TextureSave &saveData, const char *path
       ddsData.format = saveFmt;
       ddsData.mips = numMips;
       ddsData.slices = numSlices / td.depth;
-      ddsData.subdata = &subdata[0];
+      ddsData.subresources = subdata;
       ddsData.cubemap = td.cubemap && numSlices == 6;
 
       if(singleSlice)
@@ -1559,7 +1538,7 @@ PixelValue ReplayController::PickPixel(ResourceId tex, uint32_t x, uint32_t y,
   if(tex == ResourceId())
     return ret;
 
-  m_pDevice->PickPixel(m_pDevice->GetLiveID(tex), x, y, sub, typeCast, ret.floatValue);
+  m_pDevice->PickPixel(m_pDevice->GetLiveID(tex), x, y, sub, typeCast, ret.floatValue.data());
 
   return ret;
 }
@@ -1580,7 +1559,7 @@ rdcpair<PixelValue, PixelValue> ReplayController::GetMinMax(ResourceId textureId
 
 rdcarray<uint32_t> ReplayController::GetHistogram(ResourceId textureId, const Subresource &sub,
                                                   CompType typeCast, float minval, float maxval,
-                                                  bool channels[4])
+                                                  const rdcfixedarray<bool, 4> &channels)
 {
   CHECK_REPLAY_THREAD();
 
@@ -1620,7 +1599,8 @@ ShaderDebugTrace *ReplayController::DebugPixel(uint32_t x, uint32_t y, uint32_t 
   return ret;
 }
 
-ShaderDebugTrace *ReplayController::DebugThread(const uint32_t groupid[3], const uint32_t threadid[3])
+ShaderDebugTrace *ReplayController::DebugThread(const rdcfixedarray<uint32_t, 3> &groupid,
+                                                const rdcfixedarray<uint32_t, 3> &threadid)
 {
   CHECK_REPLAY_THREAD();
 
@@ -1656,7 +1636,7 @@ void ReplayController::FreeTrace(ShaderDebugTrace *trace)
 }
 
 rdcarray<ShaderVariable> ReplayController::GetCBufferVariableContents(
-    ResourceId pipeline, ResourceId shader, const char *entryPoint, uint32_t cbufslot,
+    ResourceId pipeline, ResourceId shader, const rdcstr &entryPoint, uint32_t cbufslot,
     ResourceId buffer, uint64_t offset, uint64_t length)
 {
   CHECK_REPLAY_THREAD();
@@ -1703,7 +1683,7 @@ rdcstr ReplayController::CreateRGPProfile(WindowingData window)
 
   rdcstr path = FileIO::GetTempFolderFilename() + "/renderdoc_rgp_capture.rgp";
 
-  FileIO::Delete(path.c_str());
+  FileIO::Delete(path);
 
   ReplayOutput *output = CreateOutput(window, ReplayOutputType::Texture);
 
@@ -1854,6 +1834,27 @@ void ReplayController::Shutdown()
 {
   CHECK_REPLAY_THREAD();
 
+  RDCLOG("Shutting down replay renderer");
+
+  for(size_t i = 0; i < m_Outputs.size(); i++)
+    SAFE_DELETE(m_Outputs[i]);
+
+  m_Outputs.clear();
+
+  for(auto it = m_CustomShaders.begin(); it != m_CustomShaders.end(); ++it)
+    m_pDevice->FreeCustomShader(*it);
+
+  m_CustomShaders.clear();
+
+  for(auto it = m_TargetResources.begin(); it != m_TargetResources.end(); ++it)
+    m_pDevice->FreeTargetResource(*it);
+
+  m_TargetResources.clear();
+
+  if(m_pDevice)
+    m_pDevice->Shutdown();
+  m_pDevice = NULL;
+
   delete this;
 }
 
@@ -1872,7 +1873,7 @@ rdcarray<ShaderEncoding> ReplayController::GetTargetShaderEncodings()
 }
 
 rdcpair<ResourceId, rdcstr> ReplayController::BuildTargetShader(
-    const char *entry, ShaderEncoding sourceEncoding, bytebuf source,
+    const rdcstr &entry, ShaderEncoding sourceEncoding, bytebuf source,
     const ShaderCompileFlags &compileFlags, ShaderStage type)
 {
   CHECK_REPLAY_THREAD();
@@ -1912,7 +1913,7 @@ rdcpair<ResourceId, rdcstr> ReplayController::BuildTargetShader(
 }
 
 rdcpair<ResourceId, rdcstr> ReplayController::BuildCustomShader(
-    const char *entry, ShaderEncoding sourceEncoding, bytebuf source,
+    const rdcstr &entry, ShaderEncoding sourceEncoding, bytebuf source,
     const ShaderCompileFlags &compileFlags, ShaderStage type)
 {
   CHECK_REPLAY_THREAD();

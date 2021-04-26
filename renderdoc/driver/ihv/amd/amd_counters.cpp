@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -68,7 +68,7 @@ AMDCounters::AMDCounters(bool dx12DebugLayerEnabled)
 
 bool AMDCounters::Init(ApiType apiType, void *pContext)
 {
-#if DISABLED(RDOC_WIN32) && DISABLED(RDOC_LINUX)
+#if DISABLED(RDOC_WIN32) && DISABLED(RDOC_LINUX) && DISABLED(RDOC_GGP)
   (void)m_dx12DebugLayerEnabled;
   return false;
 #else
@@ -99,12 +99,12 @@ bool AMDCounters::Init(ApiType apiType, void *pContext)
 #endif
 
   // first try in the plugin location it will be in distributed builds
-  rdcstr dllPath = LocatePluginFile("amd/counters", dllName.c_str());
+  rdcstr dllPath = LocatePluginFile("amd/counters", dllName);
 
-  void *module = Process::LoadModule(dllPath.c_str());
+  void *module = Process::LoadModule(dllPath);
   if(module == NULL)
   {
-    module = Process::LoadModule(dllName.c_str());
+    module = Process::LoadModule(dllName);
   }
 
   if(module == NULL)
@@ -366,12 +366,20 @@ CounterDescription AMDCounters::InternalGetCounterDescription(uint32_t internalI
     default: desc.resultType = CompType::UInt; desc.resultByteWidth = sizeof(uint32_t);
   }
 
-  status = m_pGPUPerfAPI->GPA_GetCounterUuid(m_gpaContextId, internalIndex, (GPA_UUID *)&desc.uuid);
+  GPA_UUID gpa_uuid;
+  status = m_pGPUPerfAPI->GPA_GetCounterUuid(m_gpaContextId, internalIndex, &gpa_uuid);
   if(AMD_FAILED(status))
   {
     GPA_ERROR("Get counter UUID.", status);
     return desc;
   }
+
+#if ENABLED(RDOC_WIN32)
+  memcpy(&desc.uuid, &gpa_uuid, sizeof(desc.uuid));
+#else
+  memcpy(&desc.uuid.words[0], &gpa_uuid.m_data1, sizeof(uint32_t));
+  memcpy(&desc.uuid.words[1], &gpa_uuid.m_data2, sizeof(uint32_t) * 3);
+#endif
 
   return desc;
 }

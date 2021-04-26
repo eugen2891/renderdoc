@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -57,7 +57,6 @@ inline bool DebuggerPresent()
 {
   return ::IsDebuggerPresent() == TRUE;
 }
-void WriteOutput(int channel, const char *str);
 };
 
 namespace Threading

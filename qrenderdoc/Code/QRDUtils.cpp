@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -75,7 +75,7 @@ rdcstr DoStringise(const ResourceId &el)
 }
 
 QMap<QPair<ResourceId, uint32_t>, uint32_t> PointerTypeRegistry::typeMapping;
-rdcarray<ShaderVariableType> PointerTypeRegistry::typeDescriptions;
+rdcarray<ShaderConstantType> PointerTypeRegistry::typeDescriptions;
 
 static const uint32_t TypeIDBit = 0x80000000;
 
@@ -93,7 +93,7 @@ uint32_t PointerTypeRegistry::GetTypeID(ResourceId shader, uint32_t pointerTypeI
   return typeMapping[qMakePair(shader, pointerTypeId)];
 }
 
-uint32_t PointerTypeRegistry::GetTypeID(const ShaderVariableType &structDef)
+uint32_t PointerTypeRegistry::GetTypeID(const ShaderConstantType &structDef)
 {
   // see if the type is already registered, return its existing ID
   for(uint32_t i = 1; i < typeDescriptions.size(); i++)
@@ -111,13 +111,13 @@ uint32_t PointerTypeRegistry::GetTypeID(const ShaderVariableType &structDef)
   return id;
 }
 
-const ShaderVariableType &PointerTypeRegistry::GetTypeDescriptor(uint32_t typeId)
+const ShaderConstantType &PointerTypeRegistry::GetTypeDescriptor(uint32_t typeId)
 {
   return typeDescriptions[typeId & ~TypeIDBit];
 }
 
 void PointerTypeRegistry::CacheSubTypes(const ShaderReflection *reflection,
-                                        ShaderVariableType &structDef)
+                                        ShaderConstantType &structDef)
 {
   if((structDef.descriptor.pointerTypeID & TypeIDBit) == 0)
     structDef.descriptor.pointerTypeID =
@@ -139,7 +139,7 @@ void PointerTypeRegistry::CacheShader(const ShaderReflection *reflection)
 
   for(uint32_t i = 0; i < reflection->pointerTypes.size(); i++)
   {
-    ShaderVariableType typeDesc = reflection->pointerTypes[i];
+    ShaderConstantType typeDesc = reflection->pointerTypes[i];
 
     // first recursively cache all subtypes needed by the root struct types
     CacheSubTypes(reflection, typeDesc);
@@ -196,6 +196,7 @@ struct RichResourceText
 
   // the ideal width for the document
   int idealWidth = 0;
+  int numLines = 1;
 
   // cache the context once we've obtained it.
   ICaptureContext *ctxptr = NULL;
@@ -222,7 +223,7 @@ struct RichResourceText
 
     int i = 0;
 
-    bool highdpi = widget->devicePixelRatioF() > 1.0;
+    bool highdpi = widget && widget->devicePixelRatioF() > 1.0;
 
     QVector<int> fragmentIndexFromBlockIndex;
 
@@ -231,13 +232,15 @@ struct RichResourceText
 
     text.clear();
 
+    numLines = 1;
+
     for(const QVariant &v : fragments)
     {
       if(v.userType() == qMetaTypeId<ResourceId>())
       {
         QString resname = GetTruncatedResourceName(ctx, v.value<ResourceId>()).toHtmlEscaped();
         html += lit("<td valign=\"middle\"><b>%1</b></td>"
-                    "<td><img width=\"16\" src=':/link%3.png'></td>")
+                    "<td valign=\"middle\"><img width=\"16\" src=':/link%3.png'></td>")
                     .arg(resname)
                     .arg(highdpi ? lit("@2x") : QString());
         text += resname;
@@ -246,13 +249,33 @@ struct RichResourceText
         fragmentIndexFromBlockIndex.push_back(i);
         fragmentIndexFromBlockIndex.push_back(i);
       }
+      else if(v.type() == QVariant::UInt)
+      {
+        html += lit("<td valign=\"middle\"><font color='#0000FF'><u>EID @%1</u></font></td>")
+                    .arg(v.toUInt());
+        text += lit("EID @%1").arg(v.toUInt());
+
+        fragmentIndexFromBlockIndex.push_back(i);
+      }
       else
       {
-        html += lit("<td valign=\"middle\">%1</td>").arg(v.toString().toHtmlEscaped());
+        QString htmlfrag = v.toString().toHtmlEscaped();
+        int newlines = htmlfrag.count(QLatin1Char('\n'));
+        htmlfrag.replace(lit(" "), lit("&nbsp;"));
+        htmlfrag.replace(lit("\n"), lit("</td></tr></table><table><tr><td valign=\"middle\">"));
+
+        html += lit("<td valign=\"middle\">%1</td>").arg(htmlfrag);
         text += v.toString();
 
-        // this only generates one block
+        numLines += newlines;
+
+        // this generates one block at least
         fragmentIndexFromBlockIndex.push_back(i);
+        for(int l = 0; l < newlines; l++)
+        {
+          fragmentIndexFromBlockIndex.push_back(i);
+          fragmentIndexFromBlockIndex.push_back(i);
+        }
       }
 
       i++;
@@ -265,7 +288,8 @@ struct RichResourceText
 
     doc.setDocumentMargin(0);
     doc.setHtml(html);
-    doc.setDefaultFont(widget->font());
+    if(widget)
+      doc.setDefaultFont(widget->font());
 
     if(doc.blockCount() != fragmentIndexFromBlockIndex.count())
     {
@@ -326,8 +350,22 @@ typedef QSharedPointer<GPUAddress> GPUAddressPtr;
 
 Q_DECLARE_METATYPE(GPUAddressPtr);
 
+ICaptureContext *getCaptureContext(const QWidget *widget)
+{
+  void *ctxptr = NULL;
+
+  while(widget && !ctxptr)
+  {
+    ctxptr = widget->property("ICaptureContext").value<void *>();
+    widget = widget->parentWidget();
+  }
+
+  return (ICaptureContext *)ctxptr;
+}
+
 QString ResIdTextToString(RichResourceTextPtr ptr)
 {
+  ptr->cacheDocument(NULL);
   return ptr->text;
 }
 
@@ -351,7 +389,7 @@ void RegisterMetatypeConversions()
   QMetaType::registerConverter<GPUAddressPtr, QString>(&GPUAddressToString);
 }
 
-void RichResourceTextInitialise(QVariant &var)
+void RichResourceTextInitialise(QVariant &var, ICaptureContext *ctx)
 {
   // we only upconvert from strings, any other type with a string representation is not expected to
   // contain ResourceIds. In particular if the variant is already a ResourceId we can return.
@@ -363,7 +401,8 @@ void RichResourceTextInitialise(QVariant &var)
   QString text = var.toString().trimmed();
 
   // do a simple string search first before using regular expressions
-  if(!text.contains(lit("ResourceId::")) && !text.contains(lit("GPUAddress::")))
+  if(!text.contains(lit("ResourceId::")) && !text.contains(lit("GPUAddress::")) &&
+     !text.contains(QLatin1Char('@')))
     return;
 
   // two forms: GPUAddress::012345        - typeless
@@ -394,7 +433,7 @@ void RichResourceTextInitialise(QVariant &var)
 
   // use regexp to split up into fragments of text and resourceid. The resourceid is then
   // formatted on the fly in RichResourceText::cacheDocument
-  static QRegularExpression resRE(lit("(ResourceId::)([0-9]*)"));
+  static QRegularExpression resRE(lit("(ResourceId::)([0-9]*)|(@)([0-9]+)"));
 
   match = resRE.match(text);
 
@@ -414,25 +453,59 @@ void RichResourceTextInitialise(QVariant &var)
 
     RichResourceTextPtr linkedText(new RichResourceText);
 
+    linkedText->ctxptr = ctx;
+
     while(match.hasMatch())
     {
-      qulonglong idnum = match.captured(2).toULongLong();
       ResourceId id;
-      memcpy(&id, &idnum, sizeof(id));
+      uint32_t eid = 0;
+      if(match.captured(1) == lit("ResourceId::"))
+      {
+        qulonglong idnum = match.captured(2).toULongLong();
+        memcpy(&id, &idnum, sizeof(id));
 
-      // push any text that preceeded the ResourceId.
-      if(match.capturedStart(1) > 0)
-        linkedText->fragments.push_back(text.left(match.capturedStart(1)));
+        // push any text that preceeded the ResourceId.
+        if(match.capturedStart(1) > 0)
+          linkedText->fragments.push_back(text.left(match.capturedStart(1)));
 
-      text.remove(0, match.capturedEnd(2));
+        text.remove(0, match.capturedEnd(2));
 
-      linkedText->fragments.push_back(id);
+        linkedText->fragments.push_back(id);
+      }
+      else
+      {
+        eid = match.captured(4).toUInt();
+
+        int end = match.capturedEnd(4);
+
+        // skip @..x since e.g. @2x appears in high-DPI icons and @0x08732 can appear in shader name
+        if(end < text.length() && text[end] == QLatin1Char('x'))
+        {
+          match = resRE.match(text, end);
+          continue;
+        }
+
+        // push any text that preceeded the EID.
+        if(match.capturedStart(3) > 0)
+          linkedText->fragments.push_back(text.left(match.capturedStart(3)));
+
+        text.remove(0, end);
+
+        linkedText->fragments.push_back(eid);
+      }
 
       match = resRE.match(text);
     }
 
     if(!text.isEmpty())
+    {
+      // if we didn't get any fragments that means we only encountered false positive matches e.g.
+      // @2x. Return the normal text as non-richresourcetext
+      if(linkedText->fragments.empty())
+        return;
+
       linkedText->fragments.push_back(text);
+    }
 
     linkedText->doc.setHtml(text);
 
@@ -676,6 +749,24 @@ int RichResourceTextWidthHint(const QWidget *owner, const QFont &font, const QVa
   return linkedText->idealWidth;
 }
 
+int RichResourceTextHeightHint(const QWidget *owner, const QFont &font, const QVariant &var)
+{
+  QFontMetrics metrics(font);
+
+  if(var.userType() == qMetaTypeId<RichResourceTextPtr>())
+  {
+    RichResourceTextPtr linkedText = var.value<RichResourceTextPtr>();
+
+    static const int margin = RichResourceTextMargin;
+
+    linkedText->cacheDocument(owner);
+
+    return linkedText->numLines * (metrics.lineSpacing() + margin * 2);
+  }
+
+  return metrics.height();
+}
+
 bool RichResourceTextMouseEvent(const QWidget *owner, const QVariant &var, QRect rect,
                                 const QFont &font, QMouseEvent *event)
 {
@@ -772,7 +863,7 @@ bool RichResourceTextMouseEvent(const QWidget *owner, const QVariant &var, QRect
         {
           ICaptureContext &ctx = *(ICaptureContext *)ctxptr;
 
-          const ShaderVariableType &ptrType = PointerTypeRegistry::GetTypeDescriptor(ptr->val);
+          const ShaderConstantType &ptrType = PointerTypeRegistry::GetTypeDescriptor(ptr->val);
 
           QString formatter;
 
@@ -838,6 +929,19 @@ bool RichResourceTextMouseEvent(const QWidget *owner, const QVariant &var, QRect
 
         return true;
       }
+      else if(v.type() == QVariant::UInt)
+      {
+        uint32_t eid = v.value<uint32_t>();
+
+        if(event->type() == QEvent::MouseButtonRelease && linkedText->ctxptr)
+        {
+          ICaptureContext &ctx = *(ICaptureContext *)linkedText->ctxptr;
+
+          ctx.SetEventID({}, eid, eid, false);
+        }
+
+        return true;
+      }
     }
   }
 
@@ -846,7 +950,7 @@ bool RichResourceTextMouseEvent(const QWidget *owner, const QVariant &var, QRect
 
 QString RichResourceTextFormat(ICaptureContext &ctx, QVariant var)
 {
-  RichResourceTextInitialise(var);
+  RichResourceTextInitialise(var, &ctx);
   if(var.userType() == qMetaTypeId<ResourceId>())
     return GetTruncatedResourceName(ctx, var.value<ResourceId>());
 
@@ -918,7 +1022,9 @@ QSize RichTextViewDelegate::sizeHint(const QStyleOptionViewItem &option, const Q
     QVariant v = index.data();
 
     if(RichResourceTextCheck(v))
-      return QSize(RichResourceTextWidthHint(m_widget, option.font, v), option.fontMetrics.height());
+      return QSize(
+          RichResourceTextWidthHint(m_widget, option.font, v),
+          qMax(RichResourceTextHeightHint(m_widget, option.font, v), option.fontMetrics.height()));
   }
 
   return ForwardingDelegate::sizeHint(option, index);
@@ -1167,6 +1273,21 @@ QString ToQStr(const AddressMode addr, const GraphicsAPI apitype)
   return lit("Unknown");
 }
 
+QString ToQStr(const ShadingRateCombiner addr, const GraphicsAPI apitype)
+{
+  if(IsD3D(apitype))
+  {
+    switch(addr)
+    {
+      case ShadingRateCombiner::Keep: return lit("Passthrough");
+      case ShadingRateCombiner::Replace: return lit("Override");
+      default: break;
+    }
+  }
+
+  return ToQStr(addr);
+}
+
 QString TypeString(const SigParameter &sig)
 {
   QString ret = ToQStr(sig.varType);
@@ -1277,6 +1398,9 @@ void CombineUsageEvents(ICaptureContext &ctx, const rdcarray<EventUsage> &usage,
       start = end = u.eventId;
       us = u.usage;
     }
+
+    if(u.usage == us && u.eventId == end)
+      continue;
 
     const DrawcallDescription *draw = ctx.GetDrawcall(u.eventId);
 
@@ -1951,8 +2075,10 @@ int Formatter::m_minFigures = 2, Formatter::m_maxFigures = 5, Formatter::m_expNe
 double Formatter::m_expNegValue = 0.00001;       // 10^(-5)
 double Formatter::m_expPosValue = 10000000.0;    // 10^7
 QFont *Formatter::m_Font = NULL;
+QFont *Formatter::m_FixedFont = NULL;
 float Formatter::m_FontBaseSize = 10.0f;    // this should always be overridden below, but just in
                                             // case let's pick a sensible value
+float Formatter::m_FixedFontBaseSize = 10.0f;
 QColor Formatter::m_DarkChecker, Formatter::m_LightChecker;
 
 void Formatter::setParams(const PersistantConfig &config)
@@ -1969,6 +2095,8 @@ void Formatter::setParams(const PersistantConfig &config)
   {
     m_Font = new QFont();
     m_FontBaseSize = QApplication::font().pointSizeF();
+    m_FixedFont = new QFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    m_FixedFontBaseSize = m_FixedFont->pointSizeF();
   }
 
   *m_Font =
@@ -1978,6 +2106,8 @@ void Formatter::setParams(const PersistantConfig &config)
   QFont f = QApplication::font();
   f.setPointSizeF(m_FontBaseSize * config.Font_GlobalScale);
   QApplication::setFont(f);
+
+  m_FixedFont->setPointSizeF(m_FixedFontBaseSize * config.Font_GlobalScale);
 
   Formatter::setPalette(QApplication::palette());
 }

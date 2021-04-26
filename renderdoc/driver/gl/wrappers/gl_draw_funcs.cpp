@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -687,7 +687,7 @@ bool WrappedOpenGL::Serialise_glDrawTransformFeedback(SerialiserType &ser, GLenu
 
       draw.flags |= DrawFlags::Drawcall;
 
-      draw.topology = MakePrimitiveTopology(mode);
+      m_LastTopology = MakePrimitiveTopology(mode);
 
       AddDrawcall(draw, true);
     }
@@ -740,7 +740,7 @@ bool WrappedOpenGL::Serialise_glDrawTransformFeedbackInstanced(SerialiserType &s
 
   if(IsReplayingAndReading())
   {
-    if(Check_SafeDraw(false))
+    if(instancecount == 0 || Check_SafeDraw(false))
       GL.glDrawTransformFeedbackInstanced(mode, xfb.name, instancecount);
 
     if(IsLoading(m_State))
@@ -759,7 +759,7 @@ bool WrappedOpenGL::Serialise_glDrawTransformFeedbackInstanced(SerialiserType &s
 
       draw.flags |= DrawFlags::Drawcall | DrawFlags::Instanced;
 
-      draw.topology = MakePrimitiveTopology(mode);
+      m_LastTopology = MakePrimitiveTopology(mode);
 
       AddDrawcall(draw, true);
     }
@@ -830,7 +830,7 @@ bool WrappedOpenGL::Serialise_glDrawTransformFeedbackStream(SerialiserType &ser,
 
       draw.flags |= DrawFlags::Drawcall;
 
-      draw.topology = MakePrimitiveTopology(mode);
+      m_LastTopology = MakePrimitiveTopology(mode);
 
       AddDrawcall(draw, true);
     }
@@ -884,7 +884,7 @@ bool WrappedOpenGL::Serialise_glDrawTransformFeedbackStreamInstanced(SerialiserT
 
   if(IsReplayingAndReading())
   {
-    if(Check_SafeDraw(false))
+    if(instancecount == 0 || Check_SafeDraw(false))
       GL.glDrawTransformFeedbackStreamInstanced(mode, xfb.name, stream, instancecount);
 
     if(IsLoading(m_State))
@@ -905,7 +905,7 @@ bool WrappedOpenGL::Serialise_glDrawTransformFeedbackStreamInstanced(SerialiserT
 
       draw.flags |= DrawFlags::Drawcall | DrawFlags::Instanced;
 
-      draw.topology = MakePrimitiveTopology(mode);
+      m_LastTopology = MakePrimitiveTopology(mode);
 
       AddDrawcall(draw, true);
     }
@@ -958,7 +958,7 @@ bool WrappedOpenGL::Serialise_glDrawArrays(SerialiserType &ser, GLenum mode, GLi
 
   if(IsReplayingAndReading())
   {
-    if(Check_SafeDraw(false))
+    if(count == 0 || Check_SafeDraw(false))
       GL.glDrawArrays(mode, first, count);
 
     if(IsLoading(m_State))
@@ -975,7 +975,7 @@ bool WrappedOpenGL::Serialise_glDrawArrays(SerialiserType &ser, GLenum mode, GLi
 
       draw.flags |= DrawFlags::Drawcall;
 
-      draw.topology = MakePrimitiveTopology(mode);
+      m_LastTopology = MakePrimitiveTopology(mode);
 
       AddDrawcall(draw, true);
     }
@@ -1236,7 +1236,7 @@ bool WrappedOpenGL::Serialise_glDrawArraysIndirect(SerialiserType &ser, GLenum m
 
       draw.flags |= DrawFlags::Drawcall | DrawFlags::Instanced | DrawFlags::Indirect;
 
-      draw.topology = MakePrimitiveTopology(mode);
+      m_LastTopology = MakePrimitiveTopology(mode);
 
       AddDrawcall(draw, true);
 
@@ -1295,7 +1295,7 @@ bool WrappedOpenGL::Serialise_glDrawArraysInstanced(SerialiserType &ser, GLenum 
 
   if(IsReplayingAndReading())
   {
-    if(Check_SafeDraw(false))
+    if(instancecount == 0 || Check_SafeDraw(false))
       GL.glDrawArraysInstanced(mode, first, count, instancecount);
 
     if(IsLoading(m_State))
@@ -1312,7 +1312,7 @@ bool WrappedOpenGL::Serialise_glDrawArraysInstanced(SerialiserType &ser, GLenum 
 
       draw.flags |= DrawFlags::Drawcall | DrawFlags::Instanced;
 
-      draw.topology = MakePrimitiveTopology(mode);
+      m_LastTopology = MakePrimitiveTopology(mode);
 
       AddDrawcall(draw, true);
     }
@@ -1375,7 +1375,7 @@ bool WrappedOpenGL::Serialise_glDrawArraysInstancedBaseInstance(SerialiserType &
 
   if(IsReplayingAndReading())
   {
-    if(Check_SafeDraw(false))
+    if(instancecount == 0 || count == 0 || Check_SafeDraw(false))
       GL.glDrawArraysInstancedBaseInstance(mode, first, count, instancecount, baseinstance);
 
     if(IsLoading(m_State))
@@ -1392,7 +1392,7 @@ bool WrappedOpenGL::Serialise_glDrawArraysInstancedBaseInstance(SerialiserType &
 
       draw.flags |= DrawFlags::Drawcall | DrawFlags::Instanced;
 
-      draw.topology = MakePrimitiveTopology(mode);
+      m_LastTopology = MakePrimitiveTopology(mode);
 
       AddDrawcall(draw, true);
     }
@@ -1453,7 +1453,7 @@ bool WrappedOpenGL::Serialise_glDrawElements(SerialiserType &ser, GLenum mode, G
 
   if(IsReplayingAndReading())
   {
-    if(Check_SafeDraw(true))
+    if(count == 0 || Check_SafeDraw(true))
       GL.glDrawElements(mode, count, type, (const void *)indices);
 
     if(IsLoading(m_State))
@@ -1472,8 +1472,8 @@ bool WrappedOpenGL::Serialise_glDrawElements(SerialiserType &ser, GLenum mode, G
 
       draw.flags |= DrawFlags::Drawcall | DrawFlags::Indexed;
 
-      draw.topology = MakePrimitiveTopology(mode);
-      draw.indexByteWidth = IdxSize;
+      m_LastTopology = MakePrimitiveTopology(mode);
+      m_LastIndexWidth = IdxSize;
 
       AddDrawcall(draw, true);
     }
@@ -1555,8 +1555,8 @@ bool WrappedOpenGL::Serialise_glDrawElementsIndirect(SerialiserType &ser, GLenum
       draw.flags |=
           DrawFlags::Drawcall | DrawFlags::Indexed | DrawFlags::Instanced | DrawFlags::Indirect;
 
-      draw.topology = MakePrimitiveTopology(mode);
-      draw.indexByteWidth = IdxSize;
+      m_LastTopology = MakePrimitiveTopology(mode);
+      m_LastIndexWidth = IdxSize;
 
       AddDrawcall(draw, true);
 
@@ -1618,7 +1618,7 @@ bool WrappedOpenGL::Serialise_glDrawRangeElements(SerialiserType &ser, GLenum mo
 
   if(IsReplayingAndReading())
   {
-    if(Check_SafeDraw(true))
+    if(count == 0 || Check_SafeDraw(true))
       GL.glDrawRangeElements(mode, start, end, count, type, (const void *)indices);
 
     if(IsLoading(m_State))
@@ -1637,8 +1637,8 @@ bool WrappedOpenGL::Serialise_glDrawRangeElements(SerialiserType &ser, GLenum mo
 
       draw.flags |= DrawFlags::Drawcall | DrawFlags::Indexed;
 
-      draw.topology = MakePrimitiveTopology(mode);
-      draw.indexByteWidth = IdxSize;
+      m_LastTopology = MakePrimitiveTopology(mode);
+      m_LastIndexWidth = IdxSize;
 
       AddDrawcall(draw, true);
     }
@@ -1701,7 +1701,7 @@ bool WrappedOpenGL::Serialise_glDrawRangeElementsBaseVertex(SerialiserType &ser,
 
   if(IsReplayingAndReading())
   {
-    if(Check_SafeDraw(true))
+    if(count == 0 || Check_SafeDraw(true))
       GL.glDrawRangeElementsBaseVertex(mode, start, end, count, type, (const void *)indices,
                                        basevertex);
 
@@ -1721,8 +1721,8 @@ bool WrappedOpenGL::Serialise_glDrawRangeElementsBaseVertex(SerialiserType &ser,
 
       draw.flags |= DrawFlags::Drawcall | DrawFlags::Indexed;
 
-      draw.topology = MakePrimitiveTopology(mode);
-      draw.indexByteWidth = IdxSize;
+      m_LastTopology = MakePrimitiveTopology(mode);
+      m_LastIndexWidth = IdxSize;
 
       AddDrawcall(draw, true);
     }
@@ -1784,7 +1784,7 @@ bool WrappedOpenGL::Serialise_glDrawElementsBaseVertex(SerialiserType &ser, GLen
 
   if(IsReplayingAndReading())
   {
-    if(Check_SafeDraw(true))
+    if(count == 0 || Check_SafeDraw(true))
       GL.glDrawElementsBaseVertex(mode, count, type, (const void *)indices, basevertex);
 
     if(IsLoading(m_State))
@@ -1803,8 +1803,8 @@ bool WrappedOpenGL::Serialise_glDrawElementsBaseVertex(SerialiserType &ser, GLen
 
       draw.flags |= DrawFlags::Drawcall | DrawFlags::Indexed;
 
-      draw.topology = MakePrimitiveTopology(mode);
-      draw.indexByteWidth = IdxSize;
+      m_LastTopology = MakePrimitiveTopology(mode);
+      m_LastIndexWidth = IdxSize;
 
       AddDrawcall(draw, true);
     }
@@ -1864,7 +1864,7 @@ bool WrappedOpenGL::Serialise_glDrawElementsInstanced(SerialiserType &ser, GLenu
 
   if(IsReplayingAndReading())
   {
-    if(Check_SafeDraw(true))
+    if(instancecount == 0 || count == 0 || Check_SafeDraw(true))
       GL.glDrawElementsInstanced(mode, count, type, (const void *)indices, instancecount);
 
     if(IsLoading(m_State))
@@ -1883,8 +1883,8 @@ bool WrappedOpenGL::Serialise_glDrawElementsInstanced(SerialiserType &ser, GLenu
 
       draw.flags |= DrawFlags::Drawcall | DrawFlags::Indexed | DrawFlags::Instanced;
 
-      draw.topology = MakePrimitiveTopology(mode);
-      draw.indexByteWidth = IdxSize;
+      m_LastTopology = MakePrimitiveTopology(mode);
+      m_LastIndexWidth = IdxSize;
 
       AddDrawcall(draw, true);
     }
@@ -1948,7 +1948,7 @@ bool WrappedOpenGL::Serialise_glDrawElementsInstancedBaseInstance(SerialiserType
 
   if(IsReplayingAndReading())
   {
-    if(Check_SafeDraw(true))
+    if(instancecount == 0 || count == 0 || Check_SafeDraw(true))
       GL.glDrawElementsInstancedBaseInstance(mode, count, type, (const void *)indices,
                                              instancecount, baseinstance);
 
@@ -1968,8 +1968,8 @@ bool WrappedOpenGL::Serialise_glDrawElementsInstancedBaseInstance(SerialiserType
 
       draw.flags |= DrawFlags::Drawcall | DrawFlags::Instanced | DrawFlags::Indexed;
 
-      draw.topology = MakePrimitiveTopology(mode);
-      draw.indexByteWidth = IdxSize;
+      m_LastTopology = MakePrimitiveTopology(mode);
+      m_LastIndexWidth = IdxSize;
 
       AddDrawcall(draw, true);
     }
@@ -2036,7 +2036,7 @@ bool WrappedOpenGL::Serialise_glDrawElementsInstancedBaseVertex(SerialiserType &
 
   if(IsReplayingAndReading())
   {
-    if(Check_SafeDraw(true))
+    if(instancecount == 0 || count == 0 || Check_SafeDraw(true))
       GL.glDrawElementsInstancedBaseVertex(mode, count, type, (const void *)indices, instancecount,
                                            basevertex);
 
@@ -2056,8 +2056,8 @@ bool WrappedOpenGL::Serialise_glDrawElementsInstancedBaseVertex(SerialiserType &
 
       draw.flags |= DrawFlags::Drawcall | DrawFlags::Instanced | DrawFlags::Indexed;
 
-      draw.topology = MakePrimitiveTopology(mode);
-      draw.indexByteWidth = IdxSize;
+      m_LastTopology = MakePrimitiveTopology(mode);
+      m_LastIndexWidth = IdxSize;
 
       AddDrawcall(draw, true);
     }
@@ -2123,7 +2123,7 @@ bool WrappedOpenGL::Serialise_glDrawElementsInstancedBaseVertexBaseInstance(
 
   if(IsReplayingAndReading())
   {
-    if(Check_SafeDraw(true))
+    if(instancecount == 0 || count == 0 || Check_SafeDraw(true))
       GL.glDrawElementsInstancedBaseVertexBaseInstance(mode, count, type, (const void *)indices,
                                                        instancecount, basevertex, baseinstance);
 
@@ -2143,8 +2143,8 @@ bool WrappedOpenGL::Serialise_glDrawElementsInstancedBaseVertexBaseInstance(
 
       draw.flags |= DrawFlags::Drawcall | DrawFlags::Instanced | DrawFlags::Indexed;
 
-      draw.topology = MakePrimitiveTopology(mode);
-      draw.indexByteWidth = IdxSize;
+      m_LastTopology = MakePrimitiveTopology(mode);
+      m_LastIndexWidth = IdxSize;
 
       AddDrawcall(draw, true);
     }
@@ -2210,14 +2210,14 @@ bool WrappedOpenGL::Serialise_glMultiDrawArrays(SerialiserType &ser, GLenum mode
   {
     if(IsLoading(m_State))
     {
-      if(Check_SafeDraw(false))
+      if(drawcount == 0 || count == 0 || Check_SafeDraw(false))
         GL.glMultiDrawArrays(mode, first, count, drawcount);
 
       DrawcallDescription draw;
       draw.name = StringFormat::Fmt("%s(%i)", ToStr(gl_CurChunk).c_str(), drawcount);
       draw.flags |= DrawFlags::MultiDraw;
 
-      draw.topology = MakePrimitiveTopology(mode);
+      m_LastTopology = MakePrimitiveTopology(mode);
 
       AddEvent();
       AddDrawcall(draw, true);
@@ -2238,7 +2238,7 @@ bool WrappedOpenGL::Serialise_glMultiDrawArrays(SerialiserType &ser, GLenum mode
 
         multidraw.flags |= DrawFlags::Drawcall;
 
-        multidraw.topology = MakePrimitiveTopology(mode);
+        m_LastTopology = MakePrimitiveTopology(mode);
 
         AddEvent();
         AddDrawcall(multidraw, true);
@@ -2367,7 +2367,7 @@ bool WrappedOpenGL::Serialise_glMultiDrawElements(SerialiserType &ser, GLenum mo
 
     if(IsLoading(m_State))
     {
-      if(Check_SafeDraw(true))
+      if(drawcount == 0 || count == 0 || Check_SafeDraw(true))
         GL.glMultiDrawElements(mode, count, type, inds.data(), drawcount);
 
       uint32_t IdxSize = GetIdxSize(type);
@@ -2376,10 +2376,10 @@ bool WrappedOpenGL::Serialise_glMultiDrawElements(SerialiserType &ser, GLenum mo
       draw.name = StringFormat::Fmt("%s(%i)", ToStr(gl_CurChunk).c_str(), drawcount);
 
       draw.flags |= DrawFlags::MultiDraw;
-      draw.indexByteWidth = IdxSize;
+      m_LastIndexWidth = IdxSize;
       draw.numIndices = 0;
 
-      draw.topology = MakePrimitiveTopology(mode);
+      m_LastTopology = MakePrimitiveTopology(mode);
 
       AddEvent();
       AddDrawcall(draw, true);
@@ -2394,7 +2394,7 @@ bool WrappedOpenGL::Serialise_glMultiDrawElements(SerialiserType &ser, GLenum mo
         multidraw.drawIndex = i;
         multidraw.numIndices = count[i];
         multidraw.indexOffset = (uint32_t)(indices[i] & 0xFFFFFFFF);
-        multidraw.indexByteWidth = IdxSize;
+        m_LastIndexWidth = IdxSize;
 
         multidraw.indexOffset /= IdxSize;
 
@@ -2403,7 +2403,7 @@ bool WrappedOpenGL::Serialise_glMultiDrawElements(SerialiserType &ser, GLenum mo
 
         multidraw.flags |= DrawFlags::Drawcall | DrawFlags::Indexed;
 
-        multidraw.topology = MakePrimitiveTopology(mode);
+        m_LastTopology = MakePrimitiveTopology(mode);
 
         AddEvent();
         AddDrawcall(multidraw, true);
@@ -2437,7 +2437,7 @@ bool WrappedOpenGL::Serialise_glMultiDrawElements(SerialiserType &ser, GLenum mo
         // if we're replaying part-way into a multidraw, we can replay the first part 'easily'
         // by just reducing the Count parameter to however many we want to replay. This only
         // works if we're replaying from the first multidraw to the nth (n less than Count)
-        if(Check_SafeDraw(true))
+        if(drawcount == 0 || count == 0 || Check_SafeDraw(true))
           GL.glMultiDrawElements(mode, count, type, inds.data(),
                                  RDCMIN((uint32_t)drawcount, m_LastEventID - baseEventID));
       }
@@ -2460,7 +2460,7 @@ bool WrappedOpenGL::Serialise_glMultiDrawElements(SerialiserType &ser, GLenum mo
         for(uint32_t d = 0; d < drawidx; d++)
           modcount[d] = 0;
 
-        if(Check_SafeDraw(true))
+        if(count == 0 || Check_SafeDraw(true))
           GL.glMultiDrawElements(mode, count, type, inds.data(), drawidx + 1);
       }
 
@@ -2537,7 +2537,7 @@ bool WrappedOpenGL::Serialise_glMultiDrawElementsBaseVertex(SerialiserType &ser,
 
     if(IsLoading(m_State))
     {
-      if(Check_SafeDraw(true))
+      if(drawcount == 0 || count == 0 || Check_SafeDraw(true))
         GL.glMultiDrawElementsBaseVertex(mode, count, type, inds.data(), drawcount, basevertex);
 
       uint32_t IdxSize = GetIdxSize(type);
@@ -2547,8 +2547,8 @@ bool WrappedOpenGL::Serialise_glMultiDrawElementsBaseVertex(SerialiserType &ser,
 
       draw.flags |= DrawFlags::MultiDraw;
 
-      draw.topology = MakePrimitiveTopology(mode);
-      draw.indexByteWidth = IdxSize;
+      m_LastTopology = MakePrimitiveTopology(mode);
+      m_LastIndexWidth = IdxSize;
 
       AddEvent();
       AddDrawcall(draw, true);
@@ -2572,8 +2572,8 @@ bool WrappedOpenGL::Serialise_glMultiDrawElementsBaseVertex(SerialiserType &ser,
 
         multidraw.flags |= DrawFlags::Drawcall | DrawFlags::Indexed;
 
-        multidraw.topology = MakePrimitiveTopology(mode);
-        multidraw.indexByteWidth = IdxSize;
+        m_LastTopology = MakePrimitiveTopology(mode);
+        m_LastIndexWidth = IdxSize;
 
         AddEvent();
         AddDrawcall(multidraw, true);
@@ -2607,7 +2607,7 @@ bool WrappedOpenGL::Serialise_glMultiDrawElementsBaseVertex(SerialiserType &ser,
         // if we're replaying part-way into a multidraw, we can replay the first part 'easily'
         // by just reducing the Count parameter to however many we want to replay. This only
         // works if we're replaying from the first multidraw to the nth (n less than Count)
-        if(Check_SafeDraw(true))
+        if(count == 0 || Check_SafeDraw(true))
           GL.glMultiDrawElementsBaseVertex(mode, count, type, inds.data(),
                                            RDCMIN((uint32_t)drawcount, m_LastEventID - baseEventID),
                                            basevertex);
@@ -2631,7 +2631,7 @@ bool WrappedOpenGL::Serialise_glMultiDrawElementsBaseVertex(SerialiserType &ser,
         for(uint32_t d = 0; d < drawidx; d++)
           modcount[d] = 0;
 
-        if(Check_SafeDraw(true))
+        if(count == 0 || Check_SafeDraw(true))
           GL.glMultiDrawElementsBaseVertex(mode, count, type, inds.data(), drawidx + 1, basevertex);
       }
 
@@ -2694,7 +2694,7 @@ bool WrappedOpenGL::Serialise_glMultiDrawArraysIndirect(SerialiserType &ser, GLe
     {
       CheckReplayFunctionPresent(glMultiDrawArraysIndirect);
 
-      if(Check_SafeDraw(false))
+      if(drawcount == 0 || Check_SafeDraw(false))
         GL.glMultiDrawArraysIndirect(mode, (const void *)offset, drawcount, stride);
 
       DrawcallDescription draw;
@@ -2702,7 +2702,7 @@ bool WrappedOpenGL::Serialise_glMultiDrawArraysIndirect(SerialiserType &ser, GLe
 
       draw.flags |= DrawFlags::MultiDraw;
 
-      draw.topology = MakePrimitiveTopology(mode);
+      m_LastTopology = MakePrimitiveTopology(mode);
 
       AddEvent();
       AddDrawcall(draw, true);
@@ -2746,7 +2746,7 @@ bool WrappedOpenGL::Serialise_glMultiDrawArraysIndirect(SerialiserType &ser, GLe
 
         multidraw.flags |= DrawFlags::Drawcall | DrawFlags::Instanced | DrawFlags::Indirect;
 
-        multidraw.topology = MakePrimitiveTopology(mode);
+        m_LastTopology = MakePrimitiveTopology(mode);
 
         // add a fake chunk for this individual indirect draw
         SDChunk *fakeChunk = new SDChunk(multidraw.name);
@@ -2795,7 +2795,7 @@ bool WrappedOpenGL::Serialise_glMultiDrawArraysIndirect(SerialiserType &ser, GLe
         // if we're replaying part-way into a multidraw, we can replay the first part 'easily'
         // by just reducing the Count parameter to however many we want to replay. This only
         // works if we're replaying from the first multidraw to the nth (n less than Count)
-        if(Check_SafeDraw(false))
+        if(drawcount == 0 || Check_SafeDraw(false))
           GL.glMultiDrawArraysIndirect(mode, (const void *)offset,
                                        RDCMIN((uint32_t)drawcount, m_LastEventID - baseEventID),
                                        stride);
@@ -2916,7 +2916,7 @@ bool WrappedOpenGL::Serialise_glMultiDrawElementsIndirect(SerialiserType &ser, G
       GLRenderState state;
       state.FetchState(this);
 
-      if(Check_SafeDraw(true))
+      if(drawcount == 0 || Check_SafeDraw(true))
         GL.glMultiDrawElementsIndirect(mode, type, (const void *)offset, drawcount, stride);
 
       DrawcallDescription draw;
@@ -2924,8 +2924,8 @@ bool WrappedOpenGL::Serialise_glMultiDrawElementsIndirect(SerialiserType &ser, G
 
       draw.flags |= DrawFlags::MultiDraw;
 
-      draw.topology = MakePrimitiveTopology(mode);
-      draw.indexByteWidth = IdxSize;
+      m_LastTopology = MakePrimitiveTopology(mode);
+      m_LastIndexWidth = IdxSize;
 
       AddEvent();
       AddDrawcall(draw, true);
@@ -2971,8 +2971,8 @@ bool WrappedOpenGL::Serialise_glMultiDrawElementsIndirect(SerialiserType &ser, G
         multidraw.flags |=
             DrawFlags::Drawcall | DrawFlags::Indexed | DrawFlags::Instanced | DrawFlags::Indirect;
 
-        multidraw.topology = MakePrimitiveTopology(mode);
-        multidraw.indexByteWidth = IdxSize;
+        m_LastTopology = MakePrimitiveTopology(mode);
+        m_LastIndexWidth = IdxSize;
 
         // add a fake chunk for this individual indirect draw
         SDChunk *fakeChunk = new SDChunk(multidraw.name);
@@ -3145,7 +3145,7 @@ bool WrappedOpenGL::Serialise_glMultiDrawArraysIndirectCount(SerialiserType &ser
     {
       CheckReplayFunctionPresent(glMultiDrawArraysIndirectCount);
 
-      if(Check_SafeDraw(false))
+      if(maxdrawcount == 0 || Check_SafeDraw(false))
         GL.glMultiDrawArraysIndirectCount(mode, (const void *)offset, (GLintptr)drawcount,
                                           maxdrawcount, stride);
 
@@ -3154,7 +3154,7 @@ bool WrappedOpenGL::Serialise_glMultiDrawArraysIndirectCount(SerialiserType &ser
 
       draw.flags |= DrawFlags::MultiDraw;
 
-      draw.topology = MakePrimitiveTopology(mode);
+      m_LastTopology = MakePrimitiveTopology(mode);
 
       AddEvent();
       AddDrawcall(draw, true);
@@ -3198,7 +3198,7 @@ bool WrappedOpenGL::Serialise_glMultiDrawArraysIndirectCount(SerialiserType &ser
 
         multidraw.flags |= DrawFlags::Drawcall | DrawFlags::Instanced | DrawFlags::Indirect;
 
-        multidraw.topology = MakePrimitiveTopology(mode);
+        m_LastTopology = MakePrimitiveTopology(mode);
 
         // add a fake chunk for this individual indirect draw
         SDChunk *fakeChunk = new SDChunk(multidraw.name);
@@ -3247,7 +3247,7 @@ bool WrappedOpenGL::Serialise_glMultiDrawArraysIndirectCount(SerialiserType &ser
         // if we're replaying part-way into a multidraw, we can replay the first part 'easily'
         // by just reducing the Count parameter to however many we want to replay. This only
         // works if we're replaying from the first multidraw to the nth (n less than Count)
-        if(Check_SafeDraw(false))
+        if(maxdrawcount == 0 || Check_SafeDraw(false))
           GL.glMultiDrawArraysIndirect(mode, (const void *)offset,
                                        RDCMIN((uint32_t)realdrawcount, m_LastEventID - baseEventID),
                                        stride);
@@ -3376,7 +3376,7 @@ bool WrappedOpenGL::Serialise_glMultiDrawElementsIndirectCount(SerialiserType &s
     {
       CheckReplayFunctionPresent(glMultiDrawElementsIndirectCount);
 
-      if(Check_SafeDraw(true))
+      if(maxdrawcount == 0 || Check_SafeDraw(true))
         GL.glMultiDrawElementsIndirectCount(mode, type, (const void *)offset, (GLintptr)drawcount,
                                             maxdrawcount, stride);
 
@@ -3385,8 +3385,8 @@ bool WrappedOpenGL::Serialise_glMultiDrawElementsIndirectCount(SerialiserType &s
 
       draw.flags |= DrawFlags::MultiDraw;
 
-      draw.topology = MakePrimitiveTopology(mode);
-      draw.indexByteWidth = IdxSize;
+      m_LastTopology = MakePrimitiveTopology(mode);
+      m_LastIndexWidth = IdxSize;
 
       AddEvent();
       AddDrawcall(draw, true);
@@ -3432,8 +3432,8 @@ bool WrappedOpenGL::Serialise_glMultiDrawElementsIndirectCount(SerialiserType &s
         multidraw.flags |=
             DrawFlags::Drawcall | DrawFlags::Indexed | DrawFlags::Instanced | DrawFlags::Indirect;
 
-        multidraw.topology = MakePrimitiveTopology(mode);
-        multidraw.indexByteWidth = IdxSize;
+        m_LastTopology = MakePrimitiveTopology(mode);
+        m_LastIndexWidth = IdxSize;
 
         // add a fake chunk for this individual indirect draw
         SDChunk *fakeChunk = new SDChunk(multidraw.name);
@@ -3482,7 +3482,7 @@ bool WrappedOpenGL::Serialise_glMultiDrawElementsIndirectCount(SerialiserType &s
         // if we're replaying part-way into a multidraw, we can replay the first part 'easily'
         // by just reducing the Count parameter to however many we want to replay. This only
         // works if we're replaying from the first multidraw to the nth (n less than Count)
-        if(Check_SafeDraw(true))
+        if(maxdrawcount == 0 || Check_SafeDraw(true))
           GL.glMultiDrawElementsIndirect(
               mode, type, (const void *)offset,
               RDCMIN((uint32_t)realdrawcount, m_LastEventID - baseEventID), stride);
@@ -3533,7 +3533,7 @@ bool WrappedOpenGL::Serialise_glMultiDrawElementsIndirectCount(SerialiserType &s
 
           // the offset is 0 because it's referring to our custom buffer, stride is 0 because we
           // tightly pack.
-          if(Check_SafeDraw(true))
+          if(maxdrawcount == 0 || Check_SafeDraw(true))
             GL.glMultiDrawElementsIndirect(mode, type, (const void *)0, drawidx + 1, 0);
 
           GL.glBindBuffer(eGL_DRAW_INDIRECT_BUFFER, prevBuf);
@@ -3651,7 +3651,7 @@ bool WrappedOpenGL::Serialise_glClearNamedFramebufferfv(SerialiserType &ser,
         if(type == eGL_TEXTURE)
         {
           GLint mip = 0, slice = 0;
-          GetFramebufferMipAndLayer(framebuffer.name, eGL_COLOR_ATTACHMENT0, &mip, &slice);
+          GetFramebufferMipAndLayer(framebuffer.name, attachName, &mip, &slice);
           draw.copyDestinationSubresource.mip = mip;
           draw.copyDestinationSubresource.slice = slice;
         }

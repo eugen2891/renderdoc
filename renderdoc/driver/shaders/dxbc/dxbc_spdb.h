@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -253,7 +253,7 @@ struct LocalMapping
   uint32_t numComps;
   rdcarray<LocalRange> gaps;
 
-  ShaderVariableDescriptor var;
+  ShaderConstantDescriptor var;
 
   // stored here so that we don't need to have the register mapping at the time we parse the SPDB
   // chunk
@@ -264,7 +264,7 @@ struct LocalMapping
 class SPDBChunk : public IDebugInfo
 {
 public:
-  SPDBChunk(void *data);
+  SPDBChunk(byte *data, uint32_t length);
   SPDBChunk(const SPDBChunk &) = delete;
   SPDBChunk &operator=(const SPDBChunk &o) = delete;
 

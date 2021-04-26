@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2017-2020 Baldur Karlsson
+ * Copyright (c) 2017-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -319,6 +319,20 @@ rdcstr DoStringise(const ConservativeRaster &el)
     STRINGISE_ENUM_CLASS(Disabled);
     STRINGISE_ENUM_CLASS(Underestimate);
     STRINGISE_ENUM_CLASS(Overestimate);
+  }
+  END_ENUM_STRINGISE();
+}
+
+template <>
+rdcstr DoStringise(const ShadingRateCombiner &el)
+{
+  BEGIN_ENUM_STRINGISE(ShadingRateCombiner)
+  {
+    STRINGISE_ENUM_CLASS(Keep);
+    STRINGISE_ENUM_CLASS(Replace);
+    STRINGISE_ENUM_CLASS(Min);
+    STRINGISE_ENUM_CLASS(Max);
+    STRINGISE_ENUM_CLASS(Multiply);
   }
   END_ENUM_STRINGISE();
 }
@@ -1015,6 +1029,7 @@ rdcstr DoStringise(const SectionType &el)
     STRINGISE_ENUM_CLASS_NAMED(ExtendedThumbnail, "renderdoc/internal/exthumb");
     STRINGISE_ENUM_CLASS_NAMED(EmbeddedLogfile, "renderdoc/internal/logfile");
     STRINGISE_ENUM_CLASS_NAMED(EditedShaders, "renderdoc/ui/edits");
+    STRINGISE_ENUM_CLASS_NAMED(D3D12Core, "renderdoc/internal/d3d12core");
   }
   END_ENUM_STRINGISE();
 }

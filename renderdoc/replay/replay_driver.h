@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -203,8 +203,8 @@ public:
                                         uint32_t idx, uint32_t view) = 0;
   virtual ShaderDebugTrace *DebugPixel(uint32_t eventId, uint32_t x, uint32_t y, uint32_t sample,
                                        uint32_t primitive) = 0;
-  virtual ShaderDebugTrace *DebugThread(uint32_t eventId, const uint32_t groupid[3],
-                                        const uint32_t threadid[3]) = 0;
+  virtual ShaderDebugTrace *DebugThread(uint32_t eventId, const rdcfixedarray<uint32_t, 3> &groupid,
+                                        const rdcfixedarray<uint32_t, 3> &threadid) = 0;
   virtual rdcarray<ShaderDebugState> ContinueDebug(ShaderDebugger *debugger) = 0;
   virtual void FreeDebugger(ShaderDebugger *debugger) = 0;
 
@@ -245,8 +245,9 @@ public:
 
   virtual bool GetMinMax(ResourceId texid, const Subresource &sub, CompType typeCast, float *minval,
                          float *maxval) = 0;
-  virtual bool GetHistogram(ResourceId texid, const Subresource &sub, CompType typeCast, float minval,
-                            float maxval, bool channels[4], rdcarray<uint32_t> &histogram) = 0;
+  virtual bool GetHistogram(ResourceId texid, const Subresource &sub, CompType typeCast,
+                            float minval, float maxval, const rdcfixedarray<bool, 4> &channels,
+                            rdcarray<uint32_t> &histogram) = 0;
   virtual void PickPixel(ResourceId texture, uint32_t x, uint32_t y, const Subresource &sub,
                          CompType typeCast, float pixel[4]) = 0;
 
@@ -302,14 +303,14 @@ void SetupDrawcallPointers(rdcarray<DrawcallDescription *> &drawcallTable,
 
 // for hardware/APIs that can't do line rasterization, manually expand any triangle input topology
 // to a linestrip with strip restart indices.
-void PatchLineStripIndexBuffer(const DrawcallDescription *draw, uint8_t *idx8, uint16_t *idx16,
-                               uint32_t *idx32, rdcarray<uint32_t> &patchedIndices);
+void PatchLineStripIndexBuffer(const DrawcallDescription *draw, Topology topology, uint8_t *idx8,
+                               uint16_t *idx16, uint32_t *idx32, rdcarray<uint32_t> &patchedIndices);
 
 void PatchTriangleFanRestartIndexBufer(rdcarray<uint32_t> &patchedIndices, uint32_t restartIndex);
 
 uint64_t CalcMeshOutputSize(uint64_t curSize, uint64_t requiredOutput);
 
-void StandardFillCBufferVariable(ResourceId shader, const ShaderVariableDescriptor &desc,
+void StandardFillCBufferVariable(ResourceId shader, const ShaderConstantDescriptor &desc,
                                  uint32_t dataOffset, const bytebuf &data, ShaderVariable &outvar,
                                  uint32_t matStride);
 void StandardFillCBufferVariables(ResourceId shader, const rdcarray<ShaderConstant> &invars,

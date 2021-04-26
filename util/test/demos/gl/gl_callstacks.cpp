@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -23,6 +23,8 @@
  ******************************************************************************/
 
 #include "gl_test.h"
+
+#if !defined(RELEASE)
 
 RD_TEST(GL_Callstacks, OpenGLGraphicsTest)
 {
@@ -125,3 +127,5 @@ void main()
 };
 
 REGISTER_TEST();
+
+#endif

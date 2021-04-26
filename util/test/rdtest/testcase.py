@@ -42,27 +42,27 @@ class ShaderVariableCheck:
     def value(self, value_: list):
         count = len(value_)
         if isinstance(value_[0], float):
-            if self.var.value.fv[0:count] != value_:
+            if list(self.var.value.f32v[0:count]) != list(value_):
                 raise TestFailureException("Float variable {} value mismatch, expected {} but got {}"
-                                           .format(self.var.name, value_, self.var.value.fv[0:count]))
+                                           .format(self.var.name, value_, self.var.value.f32v[0:count]))
         else:
             # hack - check signed and unsigned values
-            if self.var.value.iv[0:count] != value_ and self.var.value.uv[0:count] != value_:
+            if list(self.var.value.s32v[0:count] ) != list(value_) and list(self.var.value.u32v[0:count]) != list(value_):
                 raise TestFailureException("Int variable {} value mismatch, expected {} but got {} / {}"
-                                           .format(self.var.name, value_, self.var.value.iv[0:count],
-                                                   self.var.value.uv[0:count]))
+                                           .format(self.var.name, value_, self.var.value.s32v[0:count],
+                                                   self.var.value.u32v[0:count]))
 
         return self
 
     def longvalue(self, value_: list):
         count = len(value_)
         if isinstance(value_[0], float):
-            if self.var.value.dv[0:count] != value_:
+            if list(self.var.value.f64v[0:count]) != list(value_):
                 raise TestFailureException("Float variable {} value mismatch, expected {} but got {}"
-                                           .format(self.var.name, value_, self.var.value.dv[0:count]))
+                                           .format(self.var.name, value_, self.var.value.f64v[0:count]))
         else:
             # hack - check signed and unsigned values
-            if self.var.value.s64v[0:count] != value_ and self.var.value.u64v[0:count] != value_:
+            if list(self.var.value.s64v[0:count]) != list(value_) and list(self.var.value.u64v[0:count]) != list(value_):
                 raise TestFailureException("Int variable {} value mismatch, expected {} but got {} / {}"
                                            .format(self.var.name, value_, self.var.value.s64v[0:count],
                                                    self.var.value.u64v[0:count]))
@@ -135,6 +135,7 @@ class TestCase:
     demos_test_name = ''
     demos_frame_cap = 5
     demos_frame_count = 1
+    demos_captures_expected = None
     _test_list = {}
 
     @staticmethod
@@ -204,7 +205,8 @@ class TestCase:
         if self.demos_test_name != '':
             logfile = os.path.join(util.get_tmp_dir(), 'demos.log')
             return capture.run_and_capture(util.get_demos_binary(), self.demos_test_name + " --log " + logfile,
-                                           self.demos_frame_cap, frame_count=self.demos_frame_count, logfile=logfile,
+                                           self.demos_frame_cap, frame_count=self.demos_frame_count,
+                                           captures_expected=self.demos_captures_expected, logfile=logfile,
                                            opts=self.get_capture_options(), timeout=util.get_demos_timeout())
 
         raise NotImplementedError("If run() is not implemented in a test, then"
@@ -266,12 +268,12 @@ class TestCase:
         else:
             num_indices = min(num_indices, draw.numIndices)
 
-        ioffs = draw.indexOffset * draw.indexByteWidth
+        ioffs = draw.indexOffset * ib.byteStride
 
         mesh = rd.MeshFormat()
         mesh.numIndices = num_indices
         mesh.indexByteOffset = ib.byteOffset + ioffs
-        mesh.indexByteStride = draw.indexByteWidth
+        mesh.indexByteStride = ib.byteStride
         mesh.indexResourceId = ib.resourceId
         mesh.baseVertex = draw.baseVertex
 
@@ -309,12 +311,12 @@ class TestCase:
 
         ib: rd.BoundVBuffer = self.controller.GetPipelineState().GetIBuffer()
 
-        ioffs = draw.indexOffset * draw.indexByteWidth
+        ioffs = draw.indexOffset * ib.byteStride
 
         in_mesh = rd.MeshFormat()
         in_mesh.numIndices = num_indices
         in_mesh.indexByteOffset = ib.byteOffset + ioffs
-        in_mesh.indexByteStride = draw.indexByteWidth
+        in_mesh.indexByteStride = ib.byteStride
         in_mesh.indexResourceId = ib.resourceId
         in_mesh.baseVertex = draw.baseVertex
 
@@ -373,6 +375,8 @@ class TestCase:
             # Reduce epsilon for RGBA8 textures if it's not already reduced
             if tex_details.format.compByteWidth == 1 and eps == util.FLT_EPSILON:
                 eps = (1.0 / 255.0)
+            if tex_details.format.compByteWidth == 2 and eps == util.FLT_EPSILON:
+                eps = (1.0 / 16384.0)
 
         picked: rd.PixelValue = self.controller.PickPixel(tex, x, y, sub, cast)
 
@@ -619,12 +623,12 @@ class TestCase:
         debugged.type = sourceVar.type
         debugged.rows = sourceVar.rows
         debugged.columns = sourceVar.columns
-        fv = [0.0] * 16
+        f32v = [0.0] * 16
         for i, debugVarPath in enumerate(sourceVar.variables):
             debugVar = self.get_debug_var(debugVars, debugVarPath.name)
             debugged.rowMajor = debugVar.rowMajor
-            fv[i] = debugVar.value.fv[debugVarPath.component]
-        debugged.value.fv = fv
+            f32v[i] = debugVar.value.f32v[debugVarPath.component]
+        debugged.value.f32v = f32v
         return debugged
 
     def combine_source_vars(self, vars):

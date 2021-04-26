@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -535,7 +535,11 @@ void WrappedID3D12CommandQueue::ClearAfterCapture()
   for(size_t i = 0; i < m_CmdListRecords.size(); i++)
     m_CmdListRecords[i]->Delete(GetResourceManager());
 
+  for(size_t i = 0; i < m_CmdListAllocators.size(); i++)
+    m_CmdListAllocators[i]->Delete(GetResourceManager());
+
   m_CmdListRecords.clear();
+  m_CmdListAllocators.clear();
 
   m_QueueRecord->DeleteChunks();
 }
@@ -838,6 +842,7 @@ bool WrappedID3D12CommandQueue::ProcessChunk(ReadSerialiser &ser, D3D12Chunk chu
     case D3D12Chunk::SetShaderExtUAV:
     case D3D12Chunk::Device_CreateCommittedResource2:
     case D3D12Chunk::Device_CreatePlacedResource1:
+    case D3D12Chunk::Device_CreateCommandQueue1:
       RDCERR("Unexpected chunk while processing frame: %s", ToStr(chunk).c_str());
       return false;
 
@@ -874,7 +879,7 @@ bool WrappedID3D12CommandQueue::ProcessChunk(ReadSerialiser &ser, D3D12Chunk chu
     }
     else if(!ret)
     {
-      RDCERR("Unrecognised Chunk type %s", ToStr(chunk).c_str());
+      RDCERR("Chunk failed to serialise: %s", ToStr(chunk).c_str());
       return false;
     }
   }
@@ -1612,8 +1617,6 @@ void D3D12CommandData::AddEvent()
 
   apievent.chunkIndex = uint32_t(m_StructuredFile->chunks.size() - 1);
 
-  apievent.callstack = m_ChunkMetadata.callstack;
-
   // if we're using replay-time debug messages, fetch them now since we can do better to correlate
   // to events on replay
   if(m_pDevice->GetReplayOptions().apiValidation)
@@ -1858,14 +1861,8 @@ void D3D12CommandData::AddDrawcall(const DrawcallDescription &d, bool hasEvents,
 
   draw.depthOut = ResourceId();
 
-  draw.indexByteWidth = 0;
-  draw.topology = Topology::Unknown;
-
   if(m_LastCmdListID != ResourceId())
   {
-    draw.topology = MakePrimitiveTopology(m_BakedCmdListInfo[m_LastCmdListID].state.topo);
-    draw.indexByteWidth = m_BakedCmdListInfo[m_LastCmdListID].state.ibuffer.bytewidth;
-
     rdcarray<ResourceId> rts = m_BakedCmdListInfo[m_LastCmdListID].state.GetRTVIDs();
 
     for(size_t i = 0; i < ARRAY_COUNT(draw.outputs); i++)

@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -44,7 +44,7 @@ struct feedbackData
   uint32_t numEntries;
 };
 
-void AnnotateShader(const SPIRVPatchData &patchData, const char *entryName,
+void AnnotateShader(const SPIRVPatchData &patchData, ShaderStage stage, const char *entryName,
                     const std::map<rdcspv::Binding, feedbackData> &offsetMap, uint32_t maxSlot,
                     VkDeviceAddress addr, bool bufferAddressKHR, rdcarray<uint32_t> &modSpirv)
 {
@@ -227,7 +227,7 @@ void AnnotateShader(const SPIRVPatchData &patchData, const char *entryName,
   rdcspv::Id entryID;
   for(const rdcspv::EntryPoint &entry : editor.GetEntries())
   {
-    if(entry.name == entryName)
+    if(entry.name == entryName && MakeShaderStage(entry.executionModel) == stage)
     {
       entryID = entry.id;
       break;
@@ -636,9 +636,17 @@ void VulkanReplay::FetchShaderFeedback(uint32_t eventId)
 
   // get pipeline create info
   if(result.compute)
+  {
     m_pDriver->GetShaderCache()->MakeComputePipelineInfo(computeInfo, state.compute.pipeline);
+  }
   else
+  {
     m_pDriver->GetShaderCache()->MakeGraphicsPipelineInfo(graphicsInfo, state.graphics.pipeline);
+
+    graphicsInfo.renderPass =
+        creationInfo.m_RenderPass[GetResID(graphicsInfo.renderPass)].loadRPs[graphicsInfo.subpass];
+    graphicsInfo.subpass = 0;
+  }
 
   if(feedbackStorageSize > m_BindlessFeedback.FeedbackBuffer.sz)
   {
@@ -761,8 +769,8 @@ void VulkanReplay::FetchShaderFeedback(uint32_t eventId)
     if(!Vulkan_Debug_FeedbackDumpDirPath().empty())
       FileIO::WriteAll(Vulkan_Debug_FeedbackDumpDirPath() + "/before_" + filename[5], modSpirv);
 
-    AnnotateShader(*pipeInfo.shaders[5].patchData, stage.pName, offsetMap, maxSlot, bufferAddress,
-                   useBufferAddressKHR, modSpirv);
+    AnnotateShader(*pipeInfo.shaders[5].patchData, ShaderStage(StageIndex(stage.stage)),
+                   stage.pName, offsetMap, maxSlot, bufferAddress, useBufferAddressKHR, modSpirv);
 
     if(!Vulkan_Debug_FeedbackDumpDirPath().empty())
       FileIO::WriteAll(Vulkan_Debug_FeedbackDumpDirPath() + "/after_" + filename[5], modSpirv);
@@ -792,8 +800,8 @@ void VulkanReplay::FetchShaderFeedback(uint32_t eventId)
       if(!Vulkan_Debug_FeedbackDumpDirPath().empty())
         FileIO::WriteAll(Vulkan_Debug_FeedbackDumpDirPath() + "/before_" + filename[idx], modSpirv);
 
-      AnnotateShader(*pipeInfo.shaders[idx].patchData, stage.pName, offsetMap, maxSlot,
-                     bufferAddress, useBufferAddressKHR, modSpirv);
+      AnnotateShader(*pipeInfo.shaders[idx].patchData, ShaderStage(StageIndex(stage.stage)),
+                     stage.pName, offsetMap, maxSlot, bufferAddress, useBufferAddressKHR, modSpirv);
 
       if(!Vulkan_Debug_FeedbackDumpDirPath().empty())
         FileIO::WriteAll(Vulkan_Debug_FeedbackDumpDirPath() + "/after_" + filename[idx], modSpirv);

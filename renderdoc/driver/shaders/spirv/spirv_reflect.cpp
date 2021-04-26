@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -46,7 +46,7 @@ void FillSpecConstantVariables(ResourceId shader, const rdcarray<ShaderConstant>
   {
     for(size_t v = 0; v < invars.size() && v < outvars.size(); v++)
     {
-      if(specInfo[i].specID == invars[v].byteOffset)
+      if(specInfo[i].specID * sizeof(uint64_t) == invars[v].byteOffset)
       {
         outvars[v].value.u64v[0] = specInfo[i].value;
       }
@@ -67,7 +67,7 @@ void AddXFBAnnotations(const ShaderReflection &refl, const SPIRVPatchData &patch
   rdcspv::Id entryid;
   for(const rdcspv::EntryPoint &entry : editor.GetEntries())
   {
-    if(entry.name == entryName)
+    if(entry.name == entryName && MakeShaderStage(entry.executionModel) == refl.stage)
     {
       entryid = entry.id;
       break;
@@ -582,21 +582,13 @@ void Reflector::PostParse()
   memberNames.clear();
 }
 
-rdcarray<rdcstr> Reflector::EntryPoints() const
+rdcarray<ShaderEntryPoint> Reflector::EntryPoints() const
 {
-  rdcarray<rdcstr> ret;
+  rdcarray<ShaderEntryPoint> ret;
   ret.reserve(entries.size());
   for(const EntryPoint &e : entries)
-    ret.push_back(e.name);
+    ret.push_back({e.name, MakeShaderStage(e.executionModel)});
   return ret;
-}
-
-ShaderStage Reflector::StageForEntry(const rdcstr &entryPoint) const
-{
-  for(const EntryPoint &e : entries)
-    if(entryPoint == e.name)
-      return MakeShaderStage(e.executionModel);
-  return ShaderStage::Count;
 }
 
 void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage stage,
@@ -615,16 +607,19 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
   const EntryPoint *entry = NULL;
   for(const EntryPoint &e : entries)
   {
-    if(entryPoint == e.name)
+    if(entryPoint == e.name && MakeShaderStage(e.executionModel) == stage)
     {
       entry = &e;
       break;
     }
   }
 
+  bool multiEntryModule = entries.size() > 1;
+
   if(!entry)
   {
-    RDCERR("Entry point %s not found in module", entryPoint.c_str());
+    RDCERR("Entry point %s for stage %s not found in module", entryPoint.c_str(),
+           ToStr(stage).c_str());
     return;
   }
 
@@ -633,14 +628,14 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
   {
     const EntryPoint &e = *entry;
 
-    if(entry->executionModes.localSizeId.x != Id())
+    if(e.executionModes.localSizeId.x != Id())
     {
       reflection.dispatchThreadsDimension[0] =
-          EvaluateConstant(e.executionModes.localSizeId.x, specInfo).value.u.x;
+          EvaluateConstant(e.executionModes.localSizeId.x, specInfo).value.u32v[0];
       reflection.dispatchThreadsDimension[1] =
-          EvaluateConstant(e.executionModes.localSizeId.y, specInfo).value.u.x;
+          EvaluateConstant(e.executionModes.localSizeId.y, specInfo).value.u32v[0];
       reflection.dispatchThreadsDimension[2] =
-          EvaluateConstant(e.executionModes.localSizeId.z, specInfo).value.u.x;
+          EvaluateConstant(e.executionModes.localSizeId.z, specInfo).value.u32v[0];
     }
     else if(e.executionModes.localSize.x > 0)
     {
@@ -660,7 +655,7 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
         RDCASSERT(c.children.size() == 3);
         for(size_t i = 0; i < c.children.size() && i < 3; i++)
           reflection.dispatchThreadsDimension[i] =
-              EvaluateConstant(c.children[i], specInfo).value.u.x;
+              EvaluateConstant(c.children[i], specInfo).value.u32v[0];
       }
     }
   }
@@ -721,7 +716,7 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
           // save top-level children referenced in structs
           if(dataTypes[dataTypes[idTypes[access.base]].InnerType()].type == DataType::StructType)
             usedStructChildren[access.base].insert(
-                EvaluateConstant(access.indexes[0], specInfo).value.u.x);
+                EvaluateConstant(access.indexes[0], specInfo).value.u32v[0]);
         }
 
         if(it.opcode() == Op::FunctionCall)
@@ -735,6 +730,15 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
         it++;
       }
     }
+  }
+
+  if(m_MajorVersion > 1 || m_MinorVersion >= 4)
+  {
+    // from SPIR-V 1.4 onwards we can trust the entry point interface list to give us all used
+    // global variables. We still use the above heuristic so we can remove unused members of
+    // gl_PerVertex in structs.
+    usedIds.clear();
+    usedIds.insert(entry->usedIds.begin(), entry->usedIds.end());
   }
 
   // arrays of elements, which can be appended to in any order and then sorted
@@ -784,6 +788,11 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
       }
 
       const bool used = usedIds.find(global.id) != usedIds.end();
+
+      // if there are multiple entry points in this module only include signature parameters that
+      // are explicitly used.
+      if(multiEntryModule && !used)
+        continue;
 
       // we want to skip any members of the builtin interface block that are completely unused and
       // just came along for the ride (usually with gl_Position, but maybe declared and still
@@ -879,7 +888,7 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
         isArray = true;
         // runtime arrays have no length
         if(varType->length != Id())
-          arraySize = EvaluateConstant(varType->length, specInfo).value.u.x;
+          arraySize = EvaluateConstant(varType->length, specInfo).value.u32v[0];
         else
           arraySize = ~0U;
         varType = &dataTypes[varType->InnerType()];
@@ -901,15 +910,24 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
 
       bindmap.bind = GetBinding(decorations[global.id].binding);
 
-      // On GL if we have a location, put that in as the bind. It will be overwritten
-      // dynamically with the actual value.
-      if(sourceAPI == GraphicsAPI::OpenGL && decorations[global.id].location != ~0U)
+      // On GL if we have a location and no binding, put that in as the bind. It will be overwritten
+      // dynamically with the actual value read from glGetUniform. This should only happen for
+      // bare uniforms and not for texture/buffer type uniforms which should have a binding
+      if(sourceAPI == GraphicsAPI::OpenGL &&
+         (decorations[global.id].flags & (Decorations::HasLocation | Decorations::HasBinding)) ==
+             Decorations::HasLocation)
+      {
         bindmap.bind = -int32_t(decorations[global.id].location);
+      }
 
       bindmap.arraySize = isArray ? arraySize : 1;
       bindmap.used = usedIds.find(global.id) != usedIds.end();
 
-      if(atomicCounter)
+      if(multiEntryModule && !bindmap.used)
+      {
+        // ignore this variable that's not in the entry point's used interface
+      }
+      else if(atomicCounter)
       {
         // GL style atomic counter variable
         RDCASSERT(sourceAPI == GraphicsAPI::OpenGL);
@@ -1097,7 +1115,7 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
       ShaderConstant spec;
       MakeConstantBlockVariable(spec, pointerTypes, dataTypes[c.type], name, decorations[c.id],
                                 specInfo);
-      spec.byteOffset = decorations[c.id].specID;
+      spec.byteOffset = decorations[c.id].specID * sizeof(uint64_t);
       spec.defaultValue = c.value.value.u64v[0];
       specblock.variables.push_back(spec);
     }
@@ -1107,6 +1125,7 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
   {
     specblock.name = "Specialization Constants";
     specblock.bufferBacked = false;
+    specblock.compileConstants = true;
     specblock.byteSize = 0;
 
     Bindpoint bindmap;
@@ -1386,7 +1405,7 @@ void Reflector::MakeConstantBlockVariable(ShaderConstant &outConst,
   if(curType->type == DataType::ArrayType)
   {
     outConst.type.descriptor.elements =
-        curType->length != Id() ? EvaluateConstant(curType->length, specInfo).value.u.x : ~0U;
+        curType->length != Id() ? EvaluateConstant(curType->length, specInfo).value.u32v[0] : ~0U;
 
     if(varDecorations.arrayStride != ~0U)
     {
@@ -1521,7 +1540,7 @@ void Reflector::AddSignatureParameter(const bool isInput, const ShaderStage stag
   uint32_t arraySize = 1;
   if(varType->type == DataType::ArrayType)
   {
-    arraySize = EvaluateConstant(varType->length, specInfo).value.u.x;
+    arraySize = EvaluateConstant(varType->length, specInfo).value.u32v[0];
     isArray = true;
     varType = &dataTypes[varType->InnerType()];
 

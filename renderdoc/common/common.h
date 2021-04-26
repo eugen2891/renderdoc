@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -507,9 +507,10 @@ void rdcassert(const char *msg, const char *file, unsigned int line, const char 
 #include "custom_assert.h"
 
 #else
-#define RDCASSERTMSG(cond) \
-  do                       \
-  {                        \
+#define RDCASSERTMSG(...) \
+  do                      \
+  {                       \
+    (void)(__VA_ARGS__);  \
   } while((void)0, 0)
 #endif
 

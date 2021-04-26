@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -259,6 +259,8 @@ VulkanPipelineStateViewer::VulkanPipelineStateViewer(ICaptureContext &ctx,
     ui->viBuffers->setHoverIconColumn(7, action, action_hover);
     ui->viBuffers->setClearSelectionOnFocusLoss(true);
     ui->viBuffers->setInstantTooltips(true);
+
+    m_Common.SetupResourceView(ui->viBuffers);
   }
 
   for(RDTreeWidget *res : resources)
@@ -273,6 +275,8 @@ VulkanPipelineStateViewer::VulkanPipelineStateViewer(ICaptureContext &ctx,
     res->setHoverIconColumn(7, action, action_hover);
     res->setClearSelectionOnFocusLoss(true);
     res->setInstantTooltips(true);
+
+    m_Common.SetupResourceView(res);
   }
 
   for(RDTreeWidget *ubo : ubos)
@@ -287,6 +291,8 @@ VulkanPipelineStateViewer::VulkanPipelineStateViewer(ICaptureContext &ctx,
     ubo->setHoverIconColumn(6, action, action_hover);
     ubo->setClearSelectionOnFocusLoss(true);
     ubo->setInstantTooltips(true);
+
+    m_Common.SetupResourceView(ubo);
   }
 
   {
@@ -302,6 +308,8 @@ VulkanPipelineStateViewer::VulkanPipelineStateViewer(ICaptureContext &ctx,
     ui->xfbBuffers->setHoverIconColumn(7, action, action_hover);
     ui->xfbBuffers->setClearSelectionOnFocusLoss(true);
     ui->xfbBuffers->setInstantTooltips(true);
+
+    m_Common.SetupResourceView(ui->xfbBuffers);
   }
 
   {
@@ -360,6 +368,8 @@ VulkanPipelineStateViewer::VulkanPipelineStateViewer(ICaptureContext &ctx,
     ui->fbAttach->setHoverIconColumn(8, action, action_hover);
     ui->fbAttach->setClearSelectionOnFocusLoss(true);
     ui->fbAttach->setInstantTooltips(true);
+
+    m_Common.SetupResourceView(ui->fbAttach);
   }
 
   {
@@ -465,7 +475,60 @@ void VulkanPipelineStateViewer::OnEventChanged(uint32_t eventId)
 
 void VulkanPipelineStateViewer::SelectPipelineStage(PipelineStage stage)
 {
-  ui->pipeFlow->setSelectedStage((int)stage);
+  if(stage == PipelineStage::SampleMask)
+    ui->pipeFlow->setSelectedStage((int)PipelineStage::Rasterizer);
+  else
+    ui->pipeFlow->setSelectedStage((int)stage);
+}
+
+ResourceId VulkanPipelineStateViewer::GetResource(RDTreeWidgetItem *item)
+{
+  QVariant tag = item->tag();
+
+  if(tag.canConvert<ResourceId>())
+  {
+    return tag.value<ResourceId>();
+  }
+  else if(tag.canConvert<VulkanTextureTag>())
+  {
+    VulkanTextureTag texTag = tag.value<VulkanTextureTag>();
+    return texTag.ID;
+  }
+  else if(tag.canConvert<VulkanBufferTag>())
+  {
+    VulkanBufferTag buf = tag.value<VulkanBufferTag>();
+    return buf.ID;
+  }
+  else if(tag.canConvert<VulkanVBIBTag>())
+  {
+    VulkanVBIBTag buf = tag.value<VulkanVBIBTag>();
+    return buf.id;
+  }
+  else if(tag.canConvert<VulkanCBufferTag>())
+  {
+    const VKPipe::Shader *stage = stageForSender(item->treeWidget());
+
+    if(stage == NULL)
+      return ResourceId();
+
+    VulkanCBufferTag cb = tag.value<VulkanCBufferTag>();
+
+    if(cb.slotIdx == ~0U)
+    {
+      // unused cbuffer, open regular buffer viewer
+      const VKPipe::Pipeline &pipe = cb.isGraphics ? m_Ctx.CurVulkanPipelineState()->graphics
+                                                   : m_Ctx.CurVulkanPipelineState()->compute;
+
+      const VKPipe::BindingElement &buf =
+          pipe.descriptorSets[cb.descSet].bindings[cb.descBind].binds[cb.arrayIdx];
+
+      return buf.resourceResourceId;
+    }
+
+    return m_Ctx.CurPipelineState().GetConstantBuffer(stage->stage, cb.slotIdx, cb.arrayIdx).resourceId;
+  }
+
+  return ResourceId();
 }
 
 void VulkanPipelineStateViewer::on_showUnused_toggled(bool checked)
@@ -1530,7 +1593,7 @@ void VulkanPipelineStateViewer::addConstantBlockRow(ShaderReflection *shaderDeta
   bool containsResource = filledSlot;
 
   // if it's masked out by stage bits, act as if it's not filled, so it's marked in red
-  if(!stageBitsIncluded)
+  if(!stageBitsIncluded && (cblock == NULL || cblock->bufferBacked))
     filledSlot = false;
 
   if(showNode(usedSlot, filledSlot))
@@ -1558,7 +1621,7 @@ void VulkanPipelineStateViewer::addConstantBlockRow(ShaderReflection *shaderDeta
       RDTreeWidgetItem *node =
           new RDTreeWidgetItem({QString(), setname, slotname,
                                 arrayLength < 0 ? tr("Array[]") : tr("Array[%1]").arg(arrayLength),
-                                QString(), QString()});
+                                QString(), QString(), QString()});
 
       if(arrayLength < 0)
         arrayLength = 0;
@@ -1623,12 +1686,28 @@ void VulkanPipelineStateViewer::addConstantBlockRow(ShaderReflection *shaderDeta
       {
         setname = QString();
         slotname = cblock->name;
-        name = tr("Push constants");
+        if(cblock->compileConstants)
+          name = tr("Specialization constants");
+        else if(descriptorBind && descriptorBind->inlineBlock)
+          name = tr("Inline uniforms");
+        else
+          name = tr("Push constants");
+
         vecrange = QString();
         sizestr = tr("%1 Variables").arg(numvars);
 
-        // could maybe get range from ShaderVariable.reg if it's filled out
-        // from SPIR-V side.
+        if(descriptorBind && descriptorBind->inlineBlock)
+        {
+          vecrange = QFormatStr("%1 - %2")
+                         .arg(descriptorBind->byteOffset)
+                         .arg(descriptorBind->byteOffset + descriptorBind->byteSize);
+        }
+        else if(!cblock->compileConstants)
+        {
+          vecrange = QFormatStr("%1 - %2")
+                         .arg(stage.pushConstantRangeByteOffset)
+                         .arg(stage.pushConstantRangeByteOffset + stage.pushConstantRangeByteSize);
+        }
       }
       else
       {
@@ -1847,16 +1926,9 @@ void VulkanPipelineStateViewer::setShaderState(const VKPipe::Shader &stage,
       ConstantBlock &cblock = shaderDetails->constantBlocks[cb];
       if(cblock.bufferBacked == false)
       {
-        // could maybe get range from ShaderVariable.reg if it's filled out
-        // from SPIR-V side.
-
-        RDTreeWidgetItem *node =
-            new RDTreeWidgetItem({QString(), QString(), cblock.name, tr("Push constants"), QString(),
-                                  tr("%1 Variables").arg(cblock.variables.count()), QString()});
-
-        node->setTag(QVariant::fromValue(VulkanCBufferTag(cb)));
-
-        ubos->addTopLevelItem(node);
+        addConstantBlockRow(
+            shaderDetails, stage, stage.bindpointMapping.constantBlocks[cblock.bindPoint].bindset,
+            stage.bindpointMapping.constantBlocks[cblock.bindPoint].bind, pipe, ubos);
       }
     }
   }
@@ -1947,19 +2019,17 @@ void VulkanPipelineStateViewer::setState()
   m_VBNodes.clear();
   m_EmptyNodes.clear();
 
-  Topology topo = draw != NULL ? draw->topology : Topology::Unknown;
-
-  int numCPs = PatchList_Count(topo);
+  int numCPs = PatchList_Count(state.inputAssembly.topology);
   if(numCPs > 0)
   {
     ui->topology->setText(tr("PatchList (%1 Control Points)").arg(numCPs));
   }
   else
   {
-    ui->topology->setText(ToQStr(topo));
+    ui->topology->setText(ToQStr(state.inputAssembly.topology));
   }
 
-  m_Common.setTopologyDiagram(ui->topologyDiagram, topo);
+  m_Common.setTopologyDiagram(ui->topologyDiagram, state.inputAssembly.topology);
 
   ui->primRestart->setVisible(state.inputAssembly.primitiveRestartEnable);
 
@@ -1986,26 +2056,25 @@ void VulkanPipelineStateViewer::setState()
       RDTreeWidgetItem *node = new RDTreeWidgetItem(
           {tr("Index"), state.inputAssembly.indexBuffer.resourceId, tr("Index"), lit("-"),
            (qulonglong)state.inputAssembly.indexBuffer.byteOffset,
-           draw != NULL ? draw->indexByteWidth : 0, (qulonglong)length, QString()});
+           (qulonglong)state.inputAssembly.indexBuffer.byteStride, (qulonglong)length, QString()});
 
       QString iformat;
-      if(draw)
-      {
-        if(draw->indexByteWidth == 1)
-          iformat = lit("ubyte");
-        else if(draw->indexByteWidth == 2)
-          iformat = lit("ushort");
-        else if(draw->indexByteWidth == 4)
-          iformat = lit("uint");
 
-        iformat += lit(" indices[%1]").arg(RENDERDOC_NumVerticesPerPrimitive(draw->topology));
-      }
+      if(state.inputAssembly.indexBuffer.byteStride == 1)
+        iformat = lit("ubyte");
+      else if(state.inputAssembly.indexBuffer.byteStride == 2)
+        iformat = lit("ushort");
+      else if(state.inputAssembly.indexBuffer.byteStride == 4)
+        iformat = lit("uint");
 
-      node->setTag(QVariant::fromValue(
-          VulkanVBIBTag(state.inputAssembly.indexBuffer.resourceId,
-                        state.inputAssembly.indexBuffer.byteOffset +
-                            (draw ? draw->indexOffset * draw->indexByteWidth : 0),
-                        iformat)));
+      iformat +=
+          lit(" indices[%1]").arg(RENDERDOC_NumVerticesPerPrimitive(state.inputAssembly.topology));
+
+      node->setTag(QVariant::fromValue(VulkanVBIBTag(
+          state.inputAssembly.indexBuffer.resourceId,
+          state.inputAssembly.indexBuffer.byteOffset +
+              (draw ? draw->indexOffset * state.inputAssembly.indexBuffer.byteStride : 0),
+          iformat)));
 
       if(!ibufferUsed)
         setInactiveRow(node);
@@ -2027,23 +2096,22 @@ void VulkanPipelineStateViewer::setState()
                                                      lit("-"), lit("-"), lit("-"), QString()});
 
       QString iformat;
-      if(draw)
-      {
-        if(draw->indexByteWidth == 1)
-          iformat = lit("ubyte");
-        else if(draw->indexByteWidth == 2)
-          iformat = lit("ushort");
-        else if(draw->indexByteWidth == 4)
-          iformat = lit("uint");
 
-        iformat += lit(" indices[%1]").arg(RENDERDOC_NumVerticesPerPrimitive(draw->topology));
-      }
+      if(state.inputAssembly.indexBuffer.byteStride == 1)
+        iformat = lit("ubyte");
+      else if(state.inputAssembly.indexBuffer.byteStride == 2)
+        iformat = lit("ushort");
+      else if(state.inputAssembly.indexBuffer.byteStride == 4)
+        iformat = lit("uint");
 
-      node->setTag(QVariant::fromValue(
-          VulkanVBIBTag(state.inputAssembly.indexBuffer.resourceId,
-                        state.inputAssembly.indexBuffer.byteOffset +
-                            (draw ? draw->indexOffset * draw->indexByteWidth : 0),
-                        iformat)));
+      iformat +=
+          lit(" indices[%1]").arg(RENDERDOC_NumVerticesPerPrimitive(state.inputAssembly.topology));
+
+      node->setTag(QVariant::fromValue(VulkanVBIBTag(
+          state.inputAssembly.indexBuffer.resourceId,
+          state.inputAssembly.indexBuffer.byteOffset +
+              (draw ? draw->indexOffset * state.inputAssembly.indexBuffer.byteStride : 0),
+          iformat)));
 
       setEmptyRow(node);
       m_EmptyNodes.push_back(node);
@@ -3146,15 +3214,13 @@ void VulkanPipelineStateViewer::exportHTML(QXmlStreamWriter &xml, const VKPipe::
     }
 
     QString ifmt = lit("UNKNOWN");
-    if(draw)
-    {
-      if(draw->indexByteWidth == 1)
-        ifmt = lit("UINT8");
-      else if(draw->indexByteWidth == 2)
-        ifmt = lit("UINT16");
-      else if(draw->indexByteWidth == 4)
-        ifmt = lit("UINT32");
-    }
+
+    if(ia.indexBuffer.byteStride == 1)
+      ifmt = lit("UINT8");
+    else if(ia.indexBuffer.byteStride == 2)
+      ifmt = lit("UINT16");
+    else if(ia.indexBuffer.byteStride == 4)
+      ifmt = lit("UINT32");
 
     m_Common.exportHTMLTable(
         xml, {tr("Buffer"), tr("Format"), tr("Offset"), tr("Byte Length"), tr("Primitive Restart")},
@@ -3165,9 +3231,9 @@ void VulkanPipelineStateViewer::exportHTML(QXmlStreamWriter &xml, const VKPipe::
   xml.writeStartElement(lit("p"));
   xml.writeEndElement();
 
-  m_Common.exportHTMLTable(xml, {tr("Primitive Topology"), tr("Tessellation Control Points")},
-                           {ToQStr(draw ? draw->topology : Topology::Unknown),
-                            m_Ctx.CurVulkanPipelineState()->tessellation.numControlPoints});
+  m_Common.exportHTMLTable(
+      xml, {tr("Primitive Topology"), tr("Tessellation Control Points")},
+      {ToQStr(ia.topology), m_Ctx.CurVulkanPipelineState()->tessellation.numControlPoints});
 }
 
 void VulkanPipelineStateViewer::exportHTML(QXmlStreamWriter &xml, const VKPipe::Shader &sh)
@@ -3228,18 +3294,42 @@ void VulkanPipelineStateViewer::exportHTML(QXmlStreamWriter &xml, const VKPipe::
       // push constants
       if(!b.bufferBacked)
       {
+        const VKPipe::BindingElement *descriptorBind = NULL;
+
+        if(bindMap.bindset < pipeline.descriptorSets.count() &&
+           bindMap.bind < pipeline.descriptorSets[bindMap.bindset].bindings.count())
+          descriptorBind = &pipeline.descriptorSets[bindMap.bindset].bindings[bindMap.bind].binds[0];
+
+        QString name;
+        if(b.compileConstants)
+          name = tr("Specialization constants");
+        else if(descriptorBind->inlineBlock)
+          name = tr("Inline uniforms");
+        else
+          name = tr("Push constants");
+
+        qulonglong offset = 0, size = 0;
+
+        if(descriptorBind->inlineBlock)
+        {
+          offset = descriptorBind->byteOffset;
+          size = descriptorBind->byteSize;
+        }
+        else if(!b.compileConstants)
+        {
+          offset = sh.pushConstantRangeByteOffset;
+          size = sh.pushConstantRangeByteSize;
+        }
+
         // could maybe get range/size from ShaderVariable.reg if it's filled out
         // from SPIR-V side.
-        rows.push_back({QString(), b.name, tr("Push constants"), (qulonglong)0, (qulonglong)0,
-                        b.variables.count(), b.byteSize});
+        rows.push_back({QString(), b.name, name, offset, size, b.variables.count(), b.byteSize});
 
         continue;
       }
 
-      const VKPipe::DescriptorSet &set =
-          pipeline.descriptorSets[sh.bindpointMapping.constantBlocks[i].bindset];
-      const VKPipe::DescriptorBinding &bind =
-          set.bindings[sh.bindpointMapping.constantBlocks[i].bind];
+      const VKPipe::DescriptorSet &set = pipeline.descriptorSets[bindMap.bindset];
+      const VKPipe::DescriptorBinding &bind = set.bindings[bindMap.bind];
 
       QString setname = QString::number(bindMap.bindset);
 
@@ -3996,8 +4086,8 @@ void VulkanPipelineStateViewer::on_debugThread_clicked()
 
   struct threadSelect
   {
-    uint32_t g[3];
-    uint32_t t[3];
+    rdcfixedarray<uint32_t, 3> g;
+    rdcfixedarray<uint32_t, 3> t;
   } thread = {
       // g[]
       {(uint32_t)ui->groupX->value(), (uint32_t)ui->groupY->value(), (uint32_t)ui->groupZ->value()},

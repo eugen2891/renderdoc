@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -789,7 +789,16 @@ bool WrappedID3D11Device::Serialise_InitialState(SerialiserType &ser, ResourceId
             ID3D11Texture2D *contentsMS = NULL;
             hr = m_pDevice->CreateTexture2D(&desc, NULL, &contentsMS);
 
-            m_DebugManager->CopyArrayToTex2DMS(contentsMS, dataTex, ~0U);
+            if(FAILED(hr) || contentsMS == NULL)
+            {
+              RDCERR("Failed to create MSAA texture for Texture2D initial contents HRESULT: %s",
+                     ToStr(hr).c_str());
+              ret = false;
+            }
+            else
+            {
+              m_DebugManager->CopyArrayToTex2DMS(contentsMS, dataTex, ~0U);
+            }
 
             SAFE_RELEASE(dataTex);
             dataTex = contentsMS;

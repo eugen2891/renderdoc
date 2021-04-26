@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -566,6 +566,8 @@ rdcarray<CounterResult> GLReplay::FetchCounters(const rdcarray<GPUCounter> &allC
   std::copy_if(allCounters.begin(), allCounters.end(), std::back_inserter(counters),
                [](const GPUCounter &c) { return IsGenericCounter(c); });
 
+  m_pDriver->SetFetchCounters(true);
+
   if(m_pAMDCounters)
   {
     // Filter out the AMD counters
@@ -601,6 +603,8 @@ rdcarray<CounterResult> GLReplay::FetchCounters(const rdcarray<GPUCounter> &allC
     if(!armCounters.empty())
       ret = FetchCountersARM(armCounters);
   }
+
+  m_pDriver->SetFetchCounters(false);
 
   if(counters.empty())
   {

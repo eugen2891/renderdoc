@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -257,9 +257,10 @@ MainWindow::MainWindow(ICaptureContext &ctx) : QMainWindow(NULL), ui(new Ui::Mai
 #endif
 
   m_NetWorker = new NetworkWorker;
-  m_NetManagerThread = new LambdaThread([]() {
+  m_NetManagerThread = new LambdaThread([this]() {
     QEventLoop loop;
     loop.exec();
+    delete m_NetWorker;
   });
   m_NetManagerThread->moveObjectToThread(m_NetWorker);
   m_NetManagerThread->start();
@@ -509,7 +510,7 @@ QString MainWindow::GetLayoutPath(int layout)
   if(layout > 0)
     filename = lit("Layout%1.config").arg(layout);
 
-  return configFilePath(filename);
+  return ConfigFilePath(filename);
 }
 
 void MainWindow::on_action_Exit_triggered()
@@ -715,8 +716,7 @@ void MainWindow::OnInjectTrigger(uint32_t PID, const rdcarray<EnvironmentModific
   LambdaThread *th = new LambdaThread([this, PID, env, name, opts, callback]() {
     QString capturefile = m_Ctx.TempCaptureFilename(name);
 
-    ExecuteResult ret =
-        RENDERDOC_InjectIntoProcess(PID, env, capturefile.toUtf8().data(), opts, false);
+    ExecuteResult ret = RENDERDOC_InjectIntoProcess(PID, env, capturefile, opts, false);
 
     GUIInvoke::call(this, [this, PID, ret, callback]() {
 
@@ -780,7 +780,7 @@ void MainWindow::LoadCapture(const QString &filename, const ReplayOptions &opts,
     {
       ICaptureFile *file = RENDERDOC_OpenCaptureFile();
 
-      ReplayStatus status = file->OpenFile(filename.toUtf8().data(), "rdc", NULL);
+      ReplayStatus status = file->OpenFile(filename, "rdc", NULL);
 
       if(status != ReplayStatus::Succeeded)
       {
@@ -798,7 +798,7 @@ void MainWindow::LoadCapture(const QString &filename, const ReplayOptions &opts,
       }
 
       driver = file->DriverName();
-      machineIdent = QString::fromUtf8(file->RecordedMachineIdent());
+      machineIdent = file->RecordedMachineIdent();
       support = file->LocalReplaySupport();
 
       file->Shutdown();
@@ -1161,7 +1161,8 @@ void MainWindow::SetTitle(const QString &filename)
   if(RENDERDOC_STABLE_BUILD)
     text += lit(FULL_VERSION_STRING);
   else
-    text += tr("Unstable release (%1 - %2)")
+    text += tr("Unstable %1 Build (%2 - %3)")
+                .arg(RENDERDOC_IsReleaseBuild() ? lit("Release") : lit("Development"))
                 .arg(lit(FULL_VERSION_STRING))
                 .arg(QString::fromLatin1(RENDERDOC_GetCommitHash()));
 
@@ -3133,6 +3134,6 @@ bool MainWindow::isUnshareableDeviceInUse()
   if(m_Ctx.Replay().CurrentRemote().Protocol()->SupportsMultiplePrograms(host))
     return false;
 
-  uint32_t ident = RENDERDOC_EnumerateRemoteTargets(host.c_str(), 0);
+  uint32_t ident = RENDERDOC_EnumerateRemoteTargets(host, 0);
   return ident != 0;
 }

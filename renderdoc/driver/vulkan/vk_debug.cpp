@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -1602,7 +1602,7 @@ void VulkanDebugManager::GetBufferData(ResourceId buff, uint64_t offset, uint64_
   if(WrappedVkDeviceMemory::IsAlloc(res))
   {
     srcBuf = m_pDriver->m_CreationInfo.m_Memory[buff].wholeMemBuf;
-    bufsize = m_pDriver->m_CreationInfo.m_Memory[buff].size;
+    bufsize = m_pDriver->m_CreationInfo.m_Memory[buff].wholeMemBufSize;
 
     if(srcBuf == VK_NULL_HANDLE)
     {

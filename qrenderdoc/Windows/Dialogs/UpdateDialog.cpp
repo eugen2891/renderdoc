@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -150,12 +150,7 @@ void UpdateDialog::on_update_clicked()
         if(!runningPrograms.isEmpty())
           runningPrograms += lit("\n");
 
-        QString target =
-            conn->GetTarget() ? QString::fromUtf8(conn->GetTarget()) : lit("<unknown>");
-        if(conn->GetAPI())
-          runningPrograms += tr("%1 running %2").arg(target).arg(QString::fromUtf8(conn->GetAPI()));
-        else
-          runningPrograms += target;
+        runningPrograms += tr("%1 running %2").arg(conn->GetTarget()).arg(conn->GetAPI());
 
         conn->Shutdown();
       }

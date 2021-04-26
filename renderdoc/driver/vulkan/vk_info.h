@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -63,6 +63,7 @@ enum VulkanDynamicStateIndex
   VkDynamicDepthBoundsTestEnableEXT,
   VkDynamicStencilTestEnableEXT,
   VkDynamicStencilOpEXT,
+  VkDynamicRayTracingStackSizeEXT,
   VkDynamicCount,
 };
 
@@ -248,6 +249,7 @@ struct VulkanCreationInfo
     {
       Shader() : refl(NULL), mapping(NULL), patchData(NULL) {}
       ResourceId module;
+      ShaderStage stage;
       rdcstr entryPoint;
       ShaderReflection *refl;
       ShaderBindpointMapping *mapping;
@@ -465,7 +467,12 @@ struct VulkanCreationInfo
               const VkMemoryAllocateInfo *pAllocInfo);
 
     uint32_t memoryTypeIndex;
-    uint64_t size;
+
+    // allocSize is the raw size of this allocation, useful for checking if resources fit.
+    uint64_t allocSize;
+    // wholeMemBufSize is the size of wholeMemBuf, which could be lower in the case of dedicated
+    // buffers with larger memory allocations than the buffer
+    uint64_t wholeMemBufSize;
 
     VkBuffer wholeMemBuf;
 

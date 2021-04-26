@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -977,6 +977,20 @@ void D3D12Replay::InitPostVSBuffers(uint32_t eventId)
           list->SOSetTargets(0, 1, &view);
           list->DrawInstanced(drawcall->numIndices, inst, drawcall->vertexOffset,
                               drawcall->instanceOffset);
+        }
+
+        // Instanced draws with a wild number of instances can hang the GPU, sync after every 1000
+        if((inst % 1000) == 0)
+        {
+          list->Close();
+
+          l = list;
+          m_pDevice->GetQueue()->ExecuteCommandLists(1, &l);
+          m_pDevice->GPUSync();
+
+          GetDebugManager()->ResetDebugAlloc();
+
+          list = GetDebugManager()->ResetDebugList();
         }
       }
 

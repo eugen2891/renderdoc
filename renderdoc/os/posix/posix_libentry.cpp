@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -26,7 +26,7 @@
 #include "hooks/hooks.h"
 #include "os/os_specific.h"
 
-void dlopen_hook_init();
+void ResetHookingEnvVars();
 
 // DllMain equivalent
 void library_loaded()
@@ -45,10 +45,12 @@ void library_loaded()
   {
     RenderDoc::Inst().Initialise();
 
-    const char *capturefile = Process::GetEnvVariable("RENDERDOC_CAPFILE");
-    const char *opts = Process::GetEnvVariable("RENDERDOC_CAPOPTS");
+    ResetHookingEnvVars();
 
-    if(opts)
+    rdcstr capturefile = Process::GetEnvVariable("RENDERDOC_CAPFILE");
+    rdcstr opts = Process::GetEnvVariable("RENDERDOC_CAPOPTS");
+
+    if(!opts.empty())
     {
       CaptureOptions optstruct;
       optstruct.DecodeFromString(opts);
@@ -58,7 +60,7 @@ void library_loaded()
       RenderDoc::Inst().SetCaptureOptions(optstruct);
     }
 
-    if(capturefile)
+    if(!capturefile.empty())
     {
       RenderDoc::Inst().SetCaptureFileTemplate(capturefile);
     }

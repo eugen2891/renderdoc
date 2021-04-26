@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  * Copyright (c) 2014 Crytek
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -865,7 +865,7 @@ void DXBCContainer::TryFetchSeparateDebugInfo(bytebuf &byteCode, const rdcstr &d
         {
           if(i == 0)
           {
-            originalShaderFile = FileIO::fopen(originalPath.c_str(), "rb");
+            originalShaderFile = FileIO::fopen(originalPath, FileIO::ReadBinary);
             foundPath = originalPath;
             continue;
           }
@@ -873,7 +873,7 @@ void DXBCContainer::TryFetchSeparateDebugInfo(bytebuf &byteCode, const rdcstr &d
           {
             const rdcstr &searchPath = searchPaths[i - 1];
             foundPath = searchPath + "/" + originalPath;
-            originalShaderFile = FileIO::fopen(foundPath.c_str(), "rb");
+            originalShaderFile = FileIO::fopen(foundPath, FileIO::ReadBinary);
           }
         }
 
@@ -1596,11 +1596,11 @@ DXBCContainer::DXBCContainer(bytebuf &ByteCode, const rdcstr &debugInfoPath, Gra
 
     if(*fourcc == FOURCC_SDBG)
     {
-      m_DebugInfo = MakeSDBGChunk(fourcc);
+      m_DebugInfo = ProcessSDBGChunk(fourcc);
     }
     else if(*fourcc == FOURCC_SPDB)
     {
-      m_DebugInfo = MakeSPDBChunk(fourcc);
+      m_DebugInfo = ProcessSPDBChunk(fourcc);
     }
   }
 
@@ -1612,9 +1612,12 @@ DXBCContainer::DXBCContainer(bytebuf &ByteCode, const rdcstr &debugInfoPath, Gra
 
     if(*fourcc == FOURCC_SPDB)
     {
-      m_DebugInfo = MakeSPDBChunk(fourcc);
+      m_DebugInfo = ProcessSPDBChunk(fourcc);
     }
   }
+
+  if(m_DXBCByteCode && m_DebugInfo == NULL && !m_DebugShaderBlob.empty())
+    m_DebugInfo = ProcessPDB(m_DebugShaderBlob.data(), (uint32_t)m_DebugShaderBlob.size());
 
   if(m_DXILByteCode)
     m_DebugInfo = m_DXILByteCode;
@@ -1859,17 +1862,18 @@ DXBCContainer::DXBCContainer(bytebuf &ByteCode, const rdcstr &debugInfoPath, Gra
     if(shaderExtReg != ~0U)
     {
       bool found = false;
-      const bool sm51 = (m_Version.Major == 5 && m_Version.Minor == 1);
+      const bool pre_sm51 = (m_Version.Major * 10 + m_Version.Minor) < 51;
 
       // see if we can find the magic UAV. If so remove it from the reflection
       for(size_t i = 0; i < m_Reflection->UAVs.size(); i++)
       {
         const ShaderInputBind &uav = m_Reflection->UAVs[i];
-        if(uav.reg == shaderExtReg && (!sm51 || shaderExtSpace == ~0U || shaderExtSpace == uav.space))
+        if(uav.reg == shaderExtReg && (pre_sm51 || shaderExtSpace == uav.space))
         {
           found = true;
           m_Reflection->UAVs.erase(i);
-          m_DXBCByteCode->SetShaderEXTUAV(api, shaderExtSpace, shaderExtReg);
+          if(m_DXBCByteCode)
+            m_DXBCByteCode->SetShaderEXTUAV(api, shaderExtSpace, shaderExtReg);
           m_ShaderExt = {shaderExtSpace, shaderExtReg};
           break;
         }

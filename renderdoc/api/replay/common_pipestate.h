@@ -1,7 +1,7 @@
 /******************************************************************************
  * The MIT License (MIT)
  *
- * Copyright (c) 2019-2020 Baldur Karlsson
+ * Copyright (c) 2019-2021 Baldur Karlsson
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -187,9 +187,15 @@ struct ColorBlend
     return false;
   }
 
-  DOCUMENT("A :class:`BlendEquation` describing the blending for color values.");
+  DOCUMENT(R"(The blending equation for color values.
+    
+:type: BlendEquation
+)");
   BlendEquation colorBlend;
-  DOCUMENT("A :class:`BlendEquation` describing the blending for alpha values.");
+  DOCUMENT(R"(The blending equation for alpha values.
+    
+:type: BlendEquation
+)");
   BlendEquation alphaBlend;
 
   DOCUMENT(R"(The :class:`LogicOperation` to use for logic operations, if
@@ -321,10 +327,16 @@ struct BoundResourceArray
   bool operator==(const BoundResourceArray &o) const { return bindPoint == o.bindPoint; }
   bool operator!=(const BoundResourceArray &o) const { return !(bindPoint == o.bindPoint); }
   bool operator<(const BoundResourceArray &o) const { return bindPoint < o.bindPoint; }
-  DOCUMENT("The bind point for this array of bound resources.");
+  DOCUMENT(R"(The bind point for this array of bound resources.
+
+:type: Bindpoint
+)");
   Bindpoint bindPoint;
 
-  DOCUMENT("The resources at this bind point");
+  DOCUMENT(R"(The resources at this bind point.
+
+:type: List[BoundResource]
+)");
   rdcarray<BoundResource> resources;
 
   DOCUMENT(R"(Lists how many bindings in :data:`resources` are dynamically used.
@@ -397,6 +409,13 @@ struct BoundCBuffer
   uint64_t byteOffset = 0;
   DOCUMENT("The size in bytes for the constant buffer. Access outside this size returns 0.");
   uint64_t byteSize = 0;
+
+  DOCUMENT(R"(The inline byte data for this constant buffer, if this binding is not backed by a
+typical buffer.
+
+:type: bytes
+)");
+  bytebuf inlineData;
 };
 
 DECLARE_REFLECTION_STRUCT(BoundCBuffer);
@@ -451,10 +470,14 @@ struct VertexInputAttribute
 from the vertex buffer before advancing to the next value.
 )");
   int instanceRate;
-  DOCUMENT("A :class:`~renderdoc.ResourceFormat` with the interpreted format of this attribute.");
+  DOCUMENT(R"(The interpreted format of this attribute.
+
+:type: ResourceFormat
+)");
   ResourceFormat format;
-  DOCUMENT(R"(A :class:`~renderdoc.PixelValue` with the generic value for this attribute if it has
-no VB bound.
+  DOCUMENT(R"(The generic value for this attribute if it has no vertex buffer bound.
+
+:type: PixelValue
 )");
   PixelValue genericValue;
   DOCUMENT("``True`` if this attribute is using :data:`genericValue` for its data.");

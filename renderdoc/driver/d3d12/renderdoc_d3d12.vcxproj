@@ -77,7 +77,7 @@
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>precompiled.h</PrecompiledHeaderFile>
       <ForcedIncludeFiles>precompiled.h</ForcedIncludeFiles>
-      <AdditionalOptions>/w44062 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/w44062 /w44840 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -123,6 +123,7 @@
     <ClCompile Include="d3d12_device_wrap6.cpp" />
     <ClCompile Include="d3d12_device_wrap7.cpp" />
     <ClCompile Include="d3d12_device_wrap8.cpp" />
+    <ClCompile Include="d3d12_device_wrap9.cpp" />
     <ClCompile Include="d3d12_hooks.cpp" />
     <ClCompile Include="d3d12_initstate.cpp" />
     <ClCompile Include="d3d12_manager.cpp" />
@@ -135,6 +136,7 @@
     <ClCompile Include="d3d12_rendertexture.cpp" />
     <ClCompile Include="d3d12_replay.cpp" />
     <ClCompile Include="d3d12_resources.cpp" />
+    <ClCompile Include="d3d12_sdk_select.cpp" />
     <ClCompile Include="d3d12_serialise.cpp" />
     <ClCompile Include="d3d12_shaderdebug.cpp" />
     <ClCompile Include="d3d12_shader_cache.cpp" />
